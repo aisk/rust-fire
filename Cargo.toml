@@ -1,0 +1,8 @@
+[package]
+name = "fire"
+version = "0.1.0"
+authors = ["An Long <aisk1988@gmail.com>"]
+license = "MIT"
+description = "fire implementation for rust"
+
+[dependencies]
