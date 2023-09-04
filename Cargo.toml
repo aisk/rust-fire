@@ -14,3 +14,6 @@ lazy_static = "1.4.0"
 proc-macro2 = "1.0.66"
 quote = "1.0.32"
 syn = { version = "2.0.28", features = ["full"] }
+
+[dev-dependencies]
+serial_test = "2.0.0"

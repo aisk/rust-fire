@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use lazy_static::lazy_static;
 use proc_macro::TokenStream;
-use quote::{format_ident, quote, ToTokens};
+use quote::{quote, ToTokens};
 
 type Command = BTreeMap<String, (String, Vec<(String, String)>)>;
 
@@ -37,10 +37,33 @@ lazy_static! {
     static ref FIRES: Mutex<Command> = Mutex::new(BTreeMap::new());
 }
 
+#[proc_macro]
+pub fn __clear_fires(_: TokenStream) -> TokenStream {
+    let mut f = FIRES.lock().unwrap();
+    f.clear();
+    return "".parse().unwrap();
+}
+
 #[proc_macro_attribute]
 pub fn fire(_metadata: TokenStream, input: TokenStream) -> TokenStream {
-    let ast: syn::ItemFn = syn::parse(input.clone()).unwrap();
-    let func = ast.sig.ident.to_string();
+    let item: syn::Item = syn::parse(input.clone()).unwrap();
+    match item {
+        syn::Item::Fn(f) => {
+            fire_func("".to_string(), "".to_string(), f);
+        }
+        syn::Item::Mod(m) => {
+            fire_mod(m);
+        }
+        _ => {
+            panic!("expected `fn` or `mod`");
+        }
+    };
+
+    return input;
+}
+
+fn fire_func(key: String, modname: String, ast: syn::ItemFn) {
+    let funcname = ast.sig.ident.to_string();
     let mut args: Vec<(String, String)> = Vec::new();
 
     for x in ast.sig.inputs {
@@ -56,9 +79,20 @@ pub fn fire(_metadata: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     let mut m = FIRES.lock().unwrap();
-    m.insert("".to_string(), (func, args));
+    if modname == "" {
+        m.insert(key, (funcname, args));
+    } else {
+        m.insert(key, (format!("{modname}::{funcname}").to_string(), args));
+    }
+}
 
-    return input;
+fn fire_mod(ast: syn::ItemMod) {
+    for item in ast.content.unwrap().1 {
+        if let syn::Item::Fn(f) = item {
+            let func = f.sig.ident.to_string();
+            fire_func(func, ast.ident.to_string(), f);
+        }
+    }
 }
 
 #[proc_macro]
@@ -117,6 +151,18 @@ pub fn run(_: TokenStream) -> TokenStream {
             return Ok(result);
         }
 
+        // returns `("xxx", ["--args=1"])` when input is `["xxx", "--args=1"]`,
+        // returns `("", ["--args=1"])` when input is `["--args=1"]`.
+        fn parse_command(args: Vec<String>) -> (String, Vec<String>) {
+            if args.len() == 0 {
+                return ("".to_string(), args);
+            }
+            if !args[0].starts_with("-") {
+                return (args[0].clone(), args[1..].to_vec());
+            }
+            return ("".to_string(), args);
+        }
+
         fn loads(input: String) -> Command {
             let mut result = Command::new();
 
@@ -126,9 +172,11 @@ pub fn run(_: TokenStream) -> TokenStream {
                 let func = parts[1];
 
                 let mut args: Vec<(String, String)> = Vec::new();
-                for s in parts[2].split('-') {
-                    let parts: Vec<&str> = s.splitn(2, ':').collect();
-                    args.push((parts[0].to_string(), parts[1].to_string()));
+                if parts[2] != "" {
+                    for s in parts[2].split('-') {
+                        let parts: Vec<&str> = s.splitn(2, ':').collect();
+                        args.push((parts[0].to_string(), parts[1].to_string()));
+                    }
                 }
 
                 result.insert(name.to_string(), (func.to_string(), args));
@@ -144,18 +192,27 @@ pub fn run(_: TokenStream) -> TokenStream {
     let parses = quote! {
         let m = loads(#data.to_string());
 
-        if m.len() != 1 {
-            panic!("multiple or zero command not implemented");
+        if m.len() == 0 {
+            panic!("no function registered");
         }
 
-        let mut pargs = if std::env::var("__IN__RUST_FIRE_TEST") == Ok("hello".to_string()) {
-            parse_args(vec!["--name=JohnSmith".to_string(), "--age=22".to_string()]).unwrap()
+        let mut args = if std::env::var("__IN__RUST_FIRE_TEST") == Ok("hello".to_string()) {
+            // Hack for test.
+            vec!["--name=JohnSmith".to_string(), "--age=22".to_string()]
+        } else if std::env::var("__IN__RUST_FIRE_TEST") == Ok("hello_mod".to_string()) {
+            // Hack for test.
+            vec!["hello".to_string(), "--name=JohnSmith".to_string(), "--age=22".to_string()]
+        } else if std::env::var("__IN__RUST_FIRE_TEST") == Ok("noargs".to_string()) {
+            // Hack for test.
+            vec![]
         } else {
-            let osargs: Vec<String> = std::env::args().skip(1).collect();
-            parse_args(osargs).unwrap()
+            std::env::args().skip(1).collect()
         };
 
-        let (func, argdefs) = m.get("").expect("not implemented");
+        let (cmd, args) = parse_command(args);
+        let mut pargs = parse_args(args).unwrap();
+
+        let (_, argdefs) = m.get(cmd.as_str()).expect("func not found");
 
         let mut args: Vec<String> = vec![];
 
@@ -174,12 +231,11 @@ pub fn run(_: TokenStream) -> TokenStream {
         }
     };
 
-    let (func, _) = m.get("").expect("not implemented");
-
     let mut calls = quote! {};
 
-    for (_k, v) in m.iter() {
-        let funcname = format_ident!("{}", func);
+    for (k, v) in m.iter() {
+        let fullname = m.get(k).expect("func not found").0.clone();
+        let e = syn::parse_str::<syn::Expr>(&fullname).unwrap();
         let mut args = quote! {};
         for i in 0..v.1.len() {
             args.extend(quote! {
@@ -187,12 +243,12 @@ pub fn run(_: TokenStream) -> TokenStream {
             });
         }
         let xxx = quote! {
-            #funcname(#args);
+            if (cmd == #k) {
+                #e(#args);
+            }
         };
 
         calls.extend(xxx);
-
-        break; // TODO: support non "" subcommands.
     }
 
     return quote! {
