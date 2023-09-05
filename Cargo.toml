@@ -2,7 +2,7 @@
 name = "fire"
 version = "0.3.0"
 authors = ["AN Long <aisk1988@gmail.com>"]
-license = "MIT"
+license = "BSD"
 description = "fire implementation for rust"
 repository = "https://github.com/aisk/rust-fire"
 edition = "2021"
