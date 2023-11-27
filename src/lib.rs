@@ -5,11 +5,12 @@ use lazy_static::lazy_static;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 
-type Command = BTreeMap<String, (String, Vec<(String, String)>)>;
+type Command = BTreeMap<String, (String, Vec<String>)>;
 
 // dumps to this format:
-// cmd1-func2-arg1:type1-arg2:type2
-// cmd2-func2-arg1:type1-arg2:type2
+// cmd1-func2-arg1-arg2
+// cmd2-func2-arg1-arg2
+// cmd3-func3
 fn dumps(f: Command) -> String {
     let mut result = "".to_string();
     for (i, (name, cmd)) in f.iter().enumerate() {
@@ -18,9 +19,7 @@ fn dumps(f: Command) -> String {
         result += &cmd.0;
         result += "-";
         for (j, argdef) in cmd.1.iter().enumerate() {
-            result += &argdef.0;
-            result += ":";
-            result += &argdef.1;
+            result += &argdef;
             if j != cmd.1.len() - 1 {
                 result += "-";
             }
@@ -64,15 +63,12 @@ pub fn fire(_metadata: TokenStream, input: TokenStream) -> TokenStream {
 
 fn fire_func(key: String, modname: String, ast: syn::ItemFn) {
     let funcname = ast.sig.ident.to_string();
-    let mut args: Vec<(String, String)> = Vec::new();
+    let mut args: Vec<String> = Vec::new();
 
     for x in ast.sig.inputs {
         match x {
             syn::FnArg::Typed(a) => {
-                args.push((
-                    a.pat.to_token_stream().to_string(),
-                    a.ty.to_token_stream().to_string(),
-                ));
+                args.push(a.pat.to_token_stream().to_string());
             }
             _ => panic!("not supported"),
         };
@@ -125,7 +121,7 @@ pub fn run(_: TokenStream) -> TokenStream {
 
         type FireResult<T> = std::result::Result<T, FireError>;
 
-        type Command = BTreeMap<String, (String, Vec<(String, String)>)>;
+        type Command = BTreeMap<String, (String, Vec<String>)>;
 
         fn parse_arg(arg: String) -> FireResult<(String, String)> {
             if !arg.starts_with("--") {
@@ -171,11 +167,10 @@ pub fn run(_: TokenStream) -> TokenStream {
                 let name = parts[0];
                 let func = parts[1];
 
-                let mut args: Vec<(String, String)> = Vec::new();
+                let mut args: Vec<String> = Vec::new();
                 if parts[2] != "" {
                     for s in parts[2].split('-') {
-                        let parts: Vec<&str> = s.splitn(2, ':').collect();
-                        args.push((parts[0].to_string(), parts[1].to_string()));
+                        args.push(s.to_string());
                     }
                 }
 
@@ -218,7 +213,7 @@ pub fn run(_: TokenStream) -> TokenStream {
 
         for def in argdefs {
             for (i, arg) in pargs.to_owned().iter().enumerate() {
-                if arg.0 != def.0 {
+                if arg.0 != *def {
                     continue;
                 }
                 args.push(pargs[i].1.clone());
@@ -266,23 +261,17 @@ fn test_fire_dumps() {
         "command1".to_string(),
         (
             "func1".to_string(),
-            vec![
-                ("arg1".to_string(), "u32".to_string()),
-                ("arg2".to_string(), "u32".to_string()),
-            ],
+            vec!["arg1".to_string(), "arg2".to_string()],
         ),
     );
     f.insert(
         "command2".to_string(),
-        (
-            "func2".to_string(),
-            vec![("arg1".to_string(), "u32".to_string())],
-        ),
+        ("func2".to_string(), vec!["arg1".to_string()]),
     );
     let s = dumps(f);
     assert!(
-        s == "command1-func1-arg1:u32-arg2:u32
-command2-func2-arg1:u32"
+        s == "command1-func1-arg1-arg2
+command2-func2-arg1"
             .to_string()
     );
 }
