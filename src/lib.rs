@@ -55,7 +55,9 @@ pub fn fire(_metadata: TokenStream, input: TokenStream) -> TokenStream {
             fire_mod(m);
         }
         _ => {
-            panic!("expected `fn` or `mod`");
+            return quote!(
+                compile_error!("fire only support `fn` or `mod`");
+            ).into();
         }
     };
 
