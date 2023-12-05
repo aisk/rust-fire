@@ -65,7 +65,7 @@ Hello, John Smith!
 Hello, John Smith!
 ```
 
-Fire will call `.parse()` on every argument, so all types which implements [FromStr](https://doc.rust-lang.org/std/str/trait.FromStr.html) is supported.
+Fire will call `.parse()` on every argument (except `&str`), so all types which implements [FromStr](https://doc.rust-lang.org/std/str/trait.FromStr.html) plus `&str` is supported.
 
 ## License
 

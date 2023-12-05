@@ -57,7 +57,8 @@ pub fn fire(_metadata: TokenStream, input: TokenStream) -> TokenStream {
         _ => {
             return quote!(
                 compile_error!("fire only support `fn` or `mod`");
-            ).into();
+            )
+            .into();
         }
     };
 
@@ -240,9 +241,15 @@ pub fn run(_: TokenStream) -> TokenStream {
         let e = syn::parse_str::<syn::Expr>(&fullname).unwrap();
         let mut args = quote! {};
         for i in 0..v.1.len() {
-            args.extend(quote! {
-                args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str()),
-            });
+            if v.1[i].1 == "& str" {
+                args.extend(quote! {
+                    args[#i].as_str(),
+                });
+            } else {
+                args.extend(quote! {
+                    args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str()),
+                });
+            }
         }
         let xxx = quote! {
             if (cmd == #k) {
