@@ -37,7 +37,7 @@ fn test_mod() {
     #[allow(dead_code)]
     #[fire::fire]
     mod command {
-        pub fn hello(name: String, age: i32) {
+        pub fn hello(name: &str, age: i32) {
             println!("hello, {name}, age: {age}");
         }
 
