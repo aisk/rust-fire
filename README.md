@@ -2,7 +2,7 @@
 
 ![logo](https://orion-uploads.openroadmedia.com/lg_805c44212fcc-rengoku-2.jpg)
 
-Turn your function(s) to a command line app. Inspires by Google's [Python Fire](github.com/google/python-fire).
+Turn your function(s) to a command line app. Inspires by Google's [Python Fire](https://github.com/google/python-fire).
 
 ## Installation
 
