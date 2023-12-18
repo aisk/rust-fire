@@ -18,6 +18,26 @@ fn test_func() {
 
 #[test]
 #[serial]
+fn test_option_args() {
+    fire::__clear_fires!();
+
+    #[fire::fire]
+    #[allow(dead_code)]
+    fn hello(name: String, age: i32, nickname: Option<&str>) {
+        if let Some(nn) = nickname {
+            println!("hello, {nn}, age: {age}");
+        } else {
+            println!("hello, {name}, age: {age}");
+        }
+    }
+
+    std::env::set_var("__IN__RUST_FIRE_TEST", "hello");
+    fire::run!();
+    std::env::remove_var("__IN__RUST_FIRE_TEST");
+}
+
+#[test]
+#[serial]
 fn test_no_args() {
     fire::__clear_fires!();
 
