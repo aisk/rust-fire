@@ -65,7 +65,7 @@ Hello, John Smith!
 Hello, John Smith!
 ```
 
-Fire will call `.parse()` on every argument (except `&str`), so all types which implements [FromStr](https://doc.rust-lang.org/std/str/trait.FromStr.html) plus `&str` is supported.
+Fire will call `.parse()` on every argument (except `&str`), so all types which implements [FromStr](https://doc.rust-lang.org/std/str/trait.FromStr.html) plus `&str` is supported. For optional argument, you can use the `Option` generic type, like `Option<String>` or `Option<i32>`;
 
 ## License
 

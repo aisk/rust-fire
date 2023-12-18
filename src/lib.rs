@@ -220,12 +220,17 @@ pub fn run(_: TokenStream) -> TokenStream {
         let mut args: Vec<String> = vec![];
 
         for def in argdefs {
+            let mut found = false;
             for (i, arg) in pargs.to_owned().iter().enumerate() {
                 if arg.0 != def.0 {
                     continue;
                 }
+                found = true;
                 args.push(pargs[i].1.clone());
                 pargs.remove(i);
+            }
+            if !found {
+                args.push("__FIRE_THIS_IS_NONE".to_owned());
             }
         }
 
@@ -241,13 +246,39 @@ pub fn run(_: TokenStream) -> TokenStream {
         let e = syn::parse_str::<syn::Expr>(&fullname).unwrap();
         let mut args = quote! {};
         for i in 0..v.1.len() {
-            if v.1[i].1 == "& str" {
+            let ty = &v.1[i].1;
+            let name = &v.1[i].0;
+            if ty == "Option < & str >" {
                 args.extend(quote! {
-                    args[#i].as_str(),
+                    if args[#i] == "__FIRE_THIS_IS_NONE" {
+                        None
+                    } else {
+                        Some(args[#i].as_str())
+                    },
+                });
+            } else if ty.starts_with("Option <") && ty.ends_with(">") {
+                args.extend(quote! {
+                    if args[#i] == "__FIRE_THIS_IS_NONE" {
+                        None
+                    } else {
+                        Some(args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str()))
+                    },
+                });
+            } else if ty == "& str" {
+                args.extend(quote! {
+                    if args[#i] == "__FIRE_THIS_IS_NONE" {
+                        panic!("arg '{}' not specified!", #name)
+                    } else {
+                        args[#i].as_str()
+                    },
                 });
             } else {
                 args.extend(quote! {
-                    args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str()),
+                    if args[#i] == "__FIRE_THIS_IS_NONE" {
+                        panic!("arg '{}' not specified!", #name)
+                    } else {
+                        args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str())
+                    },
                 });
             }
         }
