@@ -7,6 +7,56 @@ use quote::{quote, ToTokens};
 
 type Command = BTreeMap<String, (String, Vec<(String, String)>)>;
 
+struct Arg {
+    name: String,
+    value: String,
+}
+
+impl ToTokens for Arg {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let name = self.name.as_str();
+        let value = self.value.as_str();
+        return tokens.extend(quote!{
+            Arg {
+                name: #name.to_string(),
+                value: #value.to_string(),
+            }
+        });
+    }
+}
+
+struct Command2 {
+    name: String,
+    func: String,
+    args: Vec<Arg>,
+}
+
+impl ToTokens for Command2 {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let name = self.name.as_str();
+        let func = self.func.as_str();
+        let args = &self.args;
+        if args.len() > 0 {
+            // hack, quote will failed if there is no element.
+            return tokens.extend(quote!{
+                Command2 {
+                    name: #name.to_string(),
+                    func: #func.to_string(),
+                    args: #(#args)*,
+                }
+            });
+        } else {
+            return tokens.extend(quote!{
+                Command2 {
+                    name: #name.to_string(),
+                    func: #func.to_string(),
+                    args: vec!(),
+                }
+            });
+        }
+    }
+}
+
 // dumps to this format:
 // cmd1-func2-arg1:type1-arg2:type2
 // cmd2-func2-arg1:type1-arg2:type2
@@ -130,6 +180,19 @@ pub fn run(_: TokenStream) -> TokenStream {
 
         type Command = BTreeMap<String, (String, Vec<(String, String)>)>;
 
+        #[derive(Debug)]
+        struct Arg {
+            name: String,
+            value: String,
+        }
+
+        #[derive(Debug)]
+        struct Command2 {
+            name: String,
+            func: String,
+            args: Vec<Arg>,
+        }
+
         fn parse_arg(arg: String) -> FireResult<(String, String)> {
             if !arg.starts_with("--") {
                 return Err(FireError::new(format!("invalid parameters: '{}'", arg)));
@@ -192,7 +255,13 @@ pub fn run(_: TokenStream) -> TokenStream {
     let m = FIRES.lock().unwrap();
     let data: String = dumps(m.clone());
 
+    let args: Vec<Arg> = vec!(Arg{name: "aa".to_string(), value: "bb".to_string()});
+    let mm: Vec<Command2> = vec!(Command2{name: "xxx".to_string(), func: "yyy".to_string(), args: args });
+    // let mm: Vec<String> = vec!("xxx".to_string());
+
     let parses = quote! {
+        let mm = #(#mm)*;
+        println!("{mm:?}");
         let m = loads(#data.to_string());
 
         if m.len() == 0 {
