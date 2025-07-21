@@ -47,7 +47,7 @@ $ ./target/debug/app
 Welcome!
 ```
 
-The funtions in the mod should be called as sub-command with it's function name:
+The functions in the mod should be called as sub-command with it's function name:
 
 ```sh
 $ cargo build
@@ -55,7 +55,7 @@ $ ./target/debug/app bye
 Bye!
 ```
 
-Funtions with arguments will receive the arguments from CLI app arguments, with format like `--argname=argvalue`:
+Functions with arguments will receive the arguments from CLI app arguments, with format like `--argname=argvalue`:
 
 ```sh
 $ cargo build
