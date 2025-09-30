@@ -19,32 +19,6 @@ struct SubCommand {
 
 type Command = BTreeMap<String, SubCommand>;
 
-// dumps to this format:
-// cmd1-func2-arg1:type1-arg2:type2
-// cmd2-func2-arg1:type1-arg2:type2
-fn dumps(f: Command) -> String {
-    let mut result = "".to_string();
-    for (i, (name, cmd)) in f.iter().enumerate() {
-        result += &name;
-        result += "-";
-        result += &cmd.func;
-        result += "-";
-        for (j, argdef) in cmd.args.iter().enumerate() {
-            result += &argdef.name;
-            result += ":";
-            result += &argdef.ty;
-            if j != cmd.args.len() - 1 {
-                result += "-";
-            }
-        }
-        if i != f.len() - 1 {
-            result += "\n";
-        }
-    }
-
-    return result;
-}
-
 lazy_static! {
     static ref FIRES: Mutex<Command> = Mutex::new(BTreeMap::new());
 }
@@ -185,8 +159,6 @@ pub fn run(_: TokenStream) -> TokenStream {
             return Ok(result);
         }
 
-        // returns `("xxx", ["--args=1"])` when input is `["xxx", "--args=1"]`,
-        // returns `("", ["--args=1"])` when input is `["--args=1"]`.
         fn parse_command(args: Vec<String>) -> (String, Vec<String>) {
             if args.len() == 0 {
                 return ("".to_string(), args);
@@ -196,39 +168,46 @@ pub fn run(_: TokenStream) -> TokenStream {
             }
             return ("".to_string(), args);
         }
-
-        fn loads(input: String) -> Command {
-            let mut result = Command::new();
-
-            for line in input.split('\n') {
-                let parts: Vec<&str> = line.splitn(3, '-').collect();
-                let name = parts[0];
-                let func = parts[1];
-
-                let mut args: Vec<Args> = Vec::new();
-                if parts.len() > 2 && parts[2] != "" {
-                    for s in parts[2].split('-') {
-                        let parts: Vec<&str> = s.splitn(2, ':').collect();
-                        args.push(Args {
-                            name: parts[0].to_string(),
-                            ty: parts[1].to_string(),
-                        });
-                    }
-                }
-
-                result.insert(name.to_string(), SubCommand { func: func.to_string(), args });
-            }
-
-            return result;
-        }
     };
 
     let m = FIRES.lock().unwrap();
-    let data: String = dumps(m.clone());
+
+    let mut command_builder = quote! {
+        let mut m = Command::new();
+    };
+
+    for (key, subcommand) in m.iter() {
+        let func_name = &subcommand.func;
+
+        let args_vec = if subcommand.args.is_empty() {
+            quote! { vec![] }
+        } else {
+            let mut args_tokens = quote! {};
+            for arg in &subcommand.args {
+                let arg_name = &arg.name;
+                let arg_type = &arg.ty;
+                args_tokens.extend(quote! {
+                    Args {
+                        name: #arg_name.to_string(),
+                        ty: #arg_type.to_string(),
+                    },
+                });
+            }
+            quote! { vec![ #args_tokens ] }
+        };
+
+        command_builder.extend(quote! {
+            m.insert(
+                #key.to_string(),
+                SubCommand {
+                    func: #func_name.to_string(),
+                    args: #args_vec,
+                },
+            );
+        });
+    }
 
     let parses = quote! {
-        let m = loads(#data.to_string());
-
         if m.len() == 0 {
             panic!("no function registered");
         }
@@ -327,42 +306,10 @@ pub fn run(_: TokenStream) -> TokenStream {
     }
 
     return quote! {
+        #command_builder
         #defs
         #parses
         #calls
     }
     .into();
-}
-
-#[test]
-fn test_fire_dumps() {
-    let mut f = Command::new();
-    f.insert(
-        "command1".to_string(),
-        SubCommand {
-            func: "func1".to_string(),
-            args: vec![
-                Args {
-                    name: "arg1".to_string(),
-                    ty: "u32".to_string(),
-                },
-                Args {
-                    name: "arg2".to_string(),
-                    ty: "u32".to_string(),
-                },
-            ],
-        },
-    );
-    f.insert(
-        "command2".to_string(),
-        SubCommand {
-            func: "func2".to_string(),
-            args: vec![Args {
-                name: "arg1".to_string(),
-                ty: "u32".to_string(),
-            }],
-        },
-    );
-    let s = dumps(f);
-    assert!(s == "command1-func1-arg1:u32-arg2:u32\ncommand2-func2-arg1:u32".to_string());
 }
