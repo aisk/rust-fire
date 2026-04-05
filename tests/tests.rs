@@ -11,9 +11,7 @@ fn test_func() {
         println!("hello, {name}, age: {age}");
     }
 
-    std::env::set_var("__IN__RUST_FIRE_TEST", "hello");
-    fire::run!();
-    std::env::remove_var("__IN__RUST_FIRE_TEST");
+    fire::run_with_args!(vec!["--name=JohnSmith", "--age=22"]);
 }
 
 #[test]
@@ -31,9 +29,7 @@ fn test_option_args() {
         }
     }
 
-    std::env::set_var("__IN__RUST_FIRE_TEST", "hello");
-    fire::run!();
-    std::env::remove_var("__IN__RUST_FIRE_TEST");
+    fire::run_with_args!(vec!["--name=JohnSmith", "--age=22"]);
 }
 
 #[test]
@@ -44,9 +40,7 @@ fn test_no_args() {
     #[fire::fire]
     fn noargs() {}
 
-    std::env::set_var("__IN__RUST_FIRE_TEST", "noargs");
-    fire::run!();
-    std::env::remove_var("__IN__RUST_FIRE_TEST");
+    fire::run_with_args!(Vec::<String>::new());
 }
 
 #[test]
@@ -66,7 +60,5 @@ fn test_mod() {
         }
     }
 
-    std::env::set_var("__IN__RUST_FIRE_TEST", "hello_mod");
-    fire::run!();
-    std::env::remove_var("__IN__RUST_FIRE_TEST");
+    fire::run_with_args!(vec!["hello", "--name=JohnSmith", "--age=22"]);
 }
