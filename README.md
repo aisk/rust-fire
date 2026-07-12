@@ -1,5 +1,7 @@
 # Rust Fire
 
+[![Documentation](https://docs.rs/fire/badge.svg)](https://docs.rs/fire)
+
 Turn a Rust function or module into a command-line application with one attribute.
 
 ## Installation

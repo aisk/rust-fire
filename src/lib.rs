@@ -1,3 +1,117 @@
+//! Turn a Rust function or module into a command-line application with one
+//! attribute.
+//!
+//! Rust Fire derives the command-line interface from ordinary Rust function
+//! signatures. It does not use a global command registry and does not require a
+//! separate runner macro.
+//!
+//! # Quick start
+//!
+//! Add `#[fire::main]` to a function:
+//!
+//! ```no_run
+//! /// Welcome a person.
+//! #[fire::main]
+//! fn welcome(
+//!     /// Person to welcome.
+//!     name: String,
+//!     /// Add an exclamation mark.
+//!     excited: bool,
+//! ) {
+//!     let suffix = if excited { "!" } else { "." };
+//!     println!("Welcome, {name}{suffix}");
+//! }
+//! ```
+//!
+//! The generated executable accepts both `--name Ferris` and
+//! `--name=Ferris`. Boolean parameters are flags, so `excited` is enabled with
+//! `--excited`.
+//!
+//! # Subcommands
+//!
+//! Applying [`main`] to an inline module turns each function in that module
+//! into a subcommand:
+//!
+//! ```no_run
+//! /// Account management commands.
+//! #[fire::main]
+//! mod cli {
+//!     /// Create an account.
+//!     pub fn create(
+//!         /// Account name.
+//!         name: String,
+//!         /// Assign administrator privileges.
+//!         admin: bool,
+//!     ) {
+//!         println!("creating {name}, admin={admin}");
+//!     }
+//!
+//!     /// Remove an account.
+//!     pub fn remove(name: String) {
+//!         println!("removing {name}");
+//!     }
+//! }
+//! ```
+//!
+//! Function and parameter names are converted from `snake_case` to
+//! `kebab-case`. The example exposes `create` and `remove` as subcommands.
+//!
+//! # Parameter mapping
+//!
+//! | Rust type | Command-line behavior |
+//! |---|---|
+//! | `T` | Required `--name <VALUE>` option parsed with [`FromStr`](std::str::FromStr) |
+//! | `Option<T>` | Optional `--name <VALUE>` option |
+//! | `bool` | Value-less `--name` flag, defaulting to `false` |
+//! | `&str` | Borrowed string option |
+//!
+//! Every non-string value is parsed through [`FromStr`](std::str::FromStr).
+//! A parse failure, missing value, unknown option, or unknown command is
+//! reported on stderr together with the relevant usage line. CLI errors exit
+//! with status code 2.
+//!
+//! # Generated help
+//!
+//! Rust Fire automatically supports `-h` and `--help`. Function, module, and
+//! parameter documentation comments become command descriptions:
+//!
+//! ```text
+//! Welcome a person.
+//!
+//! Usage: app --name <NAME> [--excited]
+//!
+//! Options:
+//!     --name <NAME>    Person to welcome.
+//!     --excited        Add an exclamation mark.
+//!     -h, --help       Print help
+//! ```
+//!
+//! Module applications additionally support `app --help` to list commands and
+//! `app <COMMAND> --help` to describe one command.
+//!
+//! # Fallible commands
+//!
+//! Commands may return `Result`. An error is formatted through
+//! [`Display`](std::fmt::Display), printed to stderr, and causes status code 2:
+//!
+//! ```no_run
+//! #[fire::main]
+//! fn deploy(target: String) -> Result<(), &'static str> {
+//!     if target == "production" {
+//!         return Err("production deployments are disabled");
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Current limitations
+//!
+//! - Command modules must be inline modules.
+//! - Methods, generic functions, and async functions are not supported.
+//! - Parameters are named options; positional arguments and short option names
+//!   are not currently supported.
+//! - Parameter attributes other than documentation comments are rejected.
+
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
@@ -504,6 +618,48 @@ fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
 }
 
 /// Turns a function or inline module into a complete command-line application.
+///
+/// On a function, this attribute generates a CLI parser and the crate's
+/// `fn main()`. On an inline module, it also generates a subcommand dispatcher
+/// whose commands are the functions declared directly inside that module.
+///
+/// Command behavior is inferred from parameter types:
+///
+/// - `T` is a required named option;
+/// - `Option<T>` is an optional named option;
+/// - `bool` is a value-less flag;
+/// - `&str` borrows its value for the duration of the command call.
+///
+/// Documentation comments on the target and its parameters are included in
+/// the generated `-h`/`--help` output. See the [crate-level documentation](crate)
+/// for complete examples, error behavior, and current limitations.
+///
+/// # Function
+///
+/// ```no_run
+/// /// Print a greeting.
+/// #[fire::main]
+/// fn greet(name: String, loud: bool) {
+///     if loud {
+///         println!("HELLO, {}!", name.to_uppercase());
+///     } else {
+///         println!("Hello, {name}!");
+///     }
+/// }
+/// ```
+///
+/// # Module
+///
+/// ```no_run
+/// #[fire::main]
+/// mod cli {
+///     /// Start a service.
+///     pub fn start(name: String) {}
+///
+///     /// Stop a service.
+///     pub fn stop(name: String) {}
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn main(_metadata: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as Item);
