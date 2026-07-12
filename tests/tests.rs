@@ -1,64 +1,78 @@
-use serial_test::serial;
+use std::sync::Mutex;
 
-#[test]
-#[serial]
-fn test_func() {
-    fire::__clear_fires!();
+static CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-    #[fire::fire]
-    #[allow(dead_code)]
-    fn hello(name: String, age: i32) {
-        println!("hello, {name}, age: {age}");
+#[allow(dead_code)]
+mod single_command {
+    #[fire::main]
+    fn hello(name: String, age: u32, nickname: Option<String>, verbose: bool) {
+        super::CALLS
+            .lock()
+            .unwrap()
+            .push(format!("{name}:{age}:{nickname:?}:{verbose}"));
     }
 
-    fire::run_with_args!(vec!["--name=JohnSmith", "--age=22"]);
-}
-
-#[test]
-#[serial]
-fn test_option_args() {
-    fire::__clear_fires!();
-
-    #[fire::fire]
-    #[allow(dead_code)]
-    fn hello(name: String, age: i32, nickname: Option<&str>) {
-        if let Some(nn) = nickname {
-            println!("hello, {nn}, age: {age}");
-        } else {
-            println!("hello, {name}, age: {age}");
-        }
+    pub(crate) fn run<I, S>(args: I) -> Result<(), String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        __fire_run_hello(args)
     }
-
-    fire::run_with_args!(vec!["--name=JohnSmith", "--age=22"]);
 }
 
-#[test]
-#[serial]
-fn test_no_args() {
-    fire::__clear_fires!();
-
-    #[fire::fire]
-    fn noargs() {}
-
-    fire::run_with_args!(Vec::<String>::new());
-}
-
-#[test]
-#[serial]
-fn test_mod() {
-    fire::__clear_fires!();
-
-    #[allow(dead_code)]
-    #[fire::fire]
-    mod command {
-        pub fn hello(name: &str, age: i32) {
-            println!("hello, {name}, age: {age}");
+#[allow(dead_code)]
+mod command_group {
+    #[fire::main]
+    mod cli {
+        pub fn say_hello(name: &str) {
+            super::super::CALLS
+                .lock()
+                .unwrap()
+                .push(format!("hello:{name}"));
         }
 
         pub fn bye() {
-            println!("bye");
+            super::super::CALLS.lock().unwrap().push("bye".to_string());
         }
     }
 
-    fire::run_with_args!(vec!["hello", "--name=JohnSmith", "--age=22"]);
+    pub(crate) fn run<I, S>(args: I) -> Result<(), String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        cli::__fire_run(args)
+    }
+}
+
+fn take_call() -> String {
+    CALLS.lock().unwrap().pop().unwrap()
+}
+
+#[test]
+fn function_becomes_cli() {
+    single_command::run(["--name", "John", "--age=22", "--verbose"]).unwrap();
+    assert_eq!(take_call(), "John:22:None:true");
+}
+
+#[test]
+fn module_functions_become_kebab_case_subcommands() {
+    command_group::run(["say-hello", "--name", "John"]).unwrap();
+    assert_eq!(take_call(), "hello:John");
+
+    command_group::run(["bye"]).unwrap();
+    assert_eq!(take_call(), "bye");
+}
+
+#[test]
+fn errors_are_descriptive() {
+    assert_eq!(
+        single_command::run(["--age", "22"]).unwrap_err(),
+        "missing required option '--name'"
+    );
+    assert_eq!(
+        command_group::run(["missing"]).unwrap_err(),
+        "unknown command 'missing'"
+    );
 }

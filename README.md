@@ -1,8 +1,6 @@
 # Rust Fire
 
-![logo](https://orion-uploads.openroadmedia.com/lg_805c44212fcc-rengoku-2.jpg)
-
-Turn your function(s) to a command line app. Inspires by Google's [Python Fire](https://github.com/google/python-fire).
+Turn a Rust function or module into a command-line application with one attribute.
 
 ## Installation
 
@@ -10,20 +8,33 @@ Turn your function(s) to a command line app. Inspires by Google's [Python Fire](
 cargo add fire
 ```
 
-## Usage
+## One function
 
 ```rust
-// Turn a single function to CLI app.
-#[fire::fire]
-fn welcome() {
-    println!("Welcome!");
+#[fire::main]
+fn welcome(name: String, excited: bool) {
+    let suffix = if excited { "!" } else { "." };
+    println!("Welcome, {name}{suffix}");
 }
+```
 
-// Turn mutilple functions to CLI app.
-#[fire::fire]
-mod some_functions {
-    pub fn hello(name: String, times: i32) {
-        for _ in 0..times {
+```console
+$ app --name "John Smith" --excited
+Welcome, John Smith!
+```
+
+`#[fire::main]` generates the program entry point, so no separate `fn main()` or
+registration call is needed.
+
+## Subcommands
+
+Place `#[fire::main]` on an inline module to turn its functions into subcommands:
+
+```rust
+#[fire::main]
+mod cli {
+    pub fn hello(name: String, times: Option<u32>) {
+        for _ in 0..times.unwrap_or(1) {
             println!("Hello, {name}!");
         }
     }
@@ -32,41 +43,49 @@ mod some_functions {
         println!("Bye!");
     }
 }
-
-fn main() {
-    // 'Fire' the functions with command line arguments.
-    fire::run!();
-}
 ```
 
-Now you can run your CLI app. By default the single function `welcome` should be called:
+```console
+$ app hello --name John --times 2
+Hello, John!
+Hello, John!
 
-```sh
-$ cargo build
-$ ./target/debug/app
-Welcome!
-```
-
-The functions in the mod should be called as sub-command with it's function name:
-
-```sh
-$ cargo build
-$ ./target/debug/app bye
+$ app bye
 Bye!
 ```
 
-Functions with arguments will receive the arguments from CLI app arguments, with format like `--argname=argvalue`:
+Rust `snake_case` function and parameter names are exposed as CLI `kebab-case`
+names.
 
-```sh
-$ cargo build
-$ ./target/debug/app hello --name='John Smith' --times=3
-Hello, John Smith!
-Hello, John Smith!
-Hello, John Smith!
+## Parameters
+
+The function signature defines the CLI:
+
+| Rust type | CLI behavior |
+| --- | --- |
+| `T` | required option parsed with `FromStr` |
+| `Option<T>` | optional option |
+| `bool` | value-less flag, defaulting to `false` |
+| `&str` | borrowed string option |
+
+Both common option formats are accepted:
+
+```console
+$ app --name John
+$ app --name=John
 ```
 
-Fire will call `.parse()` on every argument (except `&str`), so all types which implements [FromStr](https://doc.rust-lang.org/std/str/trait.FromStr.html) plus `&str` is supported. For optional argument, you can use the `Option` generic type, like `Option<String>` or `Option<i32>`;
+A command may return `Result`. Errors are printed to stderr and the application
+exits with status 2.
+
+```rust
+#[fire::main]
+fn deploy(target: String) -> Result<(), DeployError> {
+    do_deploy(&target)?;
+    Ok(())
+}
+```
 
 ## License
 
-Licensed under the [BSD](https://github.com/aisk/rust-fire/blob/master/LICENSE) License.
+BSD-2-Clause.

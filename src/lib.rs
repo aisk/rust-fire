@@ -1,328 +1,341 @@
-use std::collections::BTreeMap;
-use std::sync::Mutex;
-
-use lazy_static::lazy_static;
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use proc_macro2::{Ident, TokenStream as TokenStream2};
+use quote::{format_ident, quote};
+use syn::{parse_macro_input, FnArg, Item, ItemFn, ItemMod, Pat, ReturnType, Type};
 
-#[derive(Clone, Debug)]
-struct Args {
-    name: String,
-    ty: String,
+struct Argument {
+    ident: Ident,
+    ty: Type,
+    cli_name: String,
+    kind: ArgumentKind,
 }
 
-#[derive(Clone, Debug)]
-struct SubCommand {
-    func: String,
-    args: Vec<Args>,
+#[derive(Clone, Copy)]
+enum ArgumentKind {
+    Required,
+    Optional,
+    Flag,
 }
 
-type Command = BTreeMap<String, SubCommand>;
-
-lazy_static! {
-    static ref FIRES: Mutex<Command> = Mutex::new(BTreeMap::new());
+fn kebab_case(name: &str) -> String {
+    name.replace('_', "-")
 }
 
-#[proc_macro]
-pub fn __clear_fires(_: TokenStream) -> TokenStream {
-    let mut f = FIRES.lock().unwrap();
-    f.clear();
-    return "".parse().unwrap();
-}
-
-#[proc_macro_attribute]
-pub fn fire(_metadata: TokenStream, input: TokenStream) -> TokenStream {
-    let item: syn::Item = syn::parse(input.clone()).unwrap();
-    match item {
-        syn::Item::Fn(f) => {
-            fire_func("".to_string(), "".to_string(), f);
-        }
-        syn::Item::Mod(m) => {
-            fire_mod(m);
-        }
-        _ => {
-            return quote! (
-                compile_error!("fire only support `fn` or `mod`");
-            )
-            .into();
-        }
+fn inner_type<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
+    let Type::Path(path) = ty else {
+        return None;
     };
-
-    return input;
-}
-
-fn fire_func(key: String, modname: String, ast: syn::ItemFn) {
-    let funcname = ast.sig.ident.to_string();
-    let mut args: Vec<Args> = Vec::new();
-
-    for x in ast.sig.inputs {
-        match x {
-            syn::FnArg::Typed(a) => {
-                args.push(Args {
-                    name: a.pat.to_token_stream().to_string(),
-                    ty: a.ty.to_token_stream().to_string(),
-                });
-            }
-            _ => panic!("not supported"),
-        };
+    let segment = path.path.segments.last()?;
+    if segment.ident != wrapper {
+        return None;
     }
-
-    let mut m = FIRES.lock().unwrap();
-    let full_func_name = if modname == "" {
-        funcname
-    } else {
-        format!("{modname}::{funcname}")
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
     };
-    m.insert(
-        key,
-        SubCommand {
-            func: full_func_name,
-            args,
-        },
-    );
-}
-
-fn fire_mod(ast: syn::ItemMod) {
-    for item in ast.content.unwrap().1 {
-        if let syn::Item::Fn(f) = item {
-            let func = f.sig.ident.to_string();
-            fire_func(func, ast.ident.to_string(), f);
-        }
+    match arguments.args.first()? {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
     }
 }
 
-fn expand_run(input: TokenStream, use_std_env_args: bool) -> TokenStream {
-    let injected_args = if use_std_env_args {
-        quote! {
-            std::env::args().skip(1).collect::<Vec<String>>()
-        }
-    } else {
-        let expr = syn::parse_macro_input!(input as syn::Expr);
-        quote! {
-            (#expr)
-                .into_iter()
-                .map(|arg| arg.to_string())
-                .collect::<Vec<String>>()
-        }
-    };
+fn is_bool(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path) if path.path.is_ident("bool"))
+}
 
-    let defs = quote! {
-        use std::collections::BTreeMap;
+fn is_str_reference(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(reference)
+        if matches!(&*reference.elem, Type::Path(path) if path.path.is_ident("str")))
+}
 
-        #[derive(Debug, Clone)]
-        struct Args {
-            name: String,
-            ty: String,
-        }
-
-        #[derive(Debug, Clone)]
-        struct SubCommand {
-            func: String,
-            args: Vec<Args>,
-        }
-
-        #[derive(Debug)]
-        struct FireError{
-            reason: String,
-        };
-
-        impl FireError {
-            fn new(reason: String) -> Self {
-                FireError{reason}
-            }
-        }
-
-        impl std::fmt::Display for FireError {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f,"{}", self.reason)
-            }
-        }
-
-        impl std::error::Error for FireError {
-            fn description(&self) -> &str {
-                &self.reason
-            }
-        }
-
-        type FireResult<T> = std::result::Result<T, FireError>;
-
-        type Command = BTreeMap<String, SubCommand>;
-
-        fn parse_arg(arg: String) -> FireResult<(String, String)> {
-            if !arg.starts_with("--") {
-                return Err(FireError::new(format!("invalid parameters: '{}'", arg)));
-            }
-            let arg = &arg[2..];
-
-            let parts: Vec<&str> = arg.split("=").collect();
-            if parts.len() != 2 {
-                return Err(FireError::new(format!("invalid parameters: '{}'", arg)));
+fn arguments(function: &ItemFn) -> syn::Result<Vec<Argument>> {
+    function
+        .sig
+        .inputs
+        .iter()
+        .map(|input| {
+            let FnArg::Typed(input) = input else {
+                return Err(syn::Error::new_spanned(
+                    input,
+                    "methods cannot be CLI commands",
+                ));
+            };
+            let Pat::Ident(pattern) = &*input.pat else {
+                return Err(syn::Error::new_spanned(
+                    &input.pat,
+                    "command parameters must be identifiers",
+                ));
+            };
+            if !input.attrs.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    &input.attrs[0],
+                    "parameter attributes are not supported",
+                ));
             }
 
-            return Ok((parts[0].to_string(), parts[1].to_string()));
-        }
-
-        fn parse_args(args: Vec<String>) -> FireResult<Vec<(String, String)>> {
-            let mut result = vec![];
-
-            for arg in args {
-                result.push(parse_arg(arg)?);
-            }
-
-            return Ok(result);
-        }
-
-        fn parse_command(args: Vec<String>) -> (String, Vec<String>) {
-            if args.len() == 0 {
-                return ("".to_string(), args);
-            }
-            if !args[0].starts_with("-") {
-                return (args[0].clone(), args[1..].to_vec());
-            }
-            return ("".to_string(), args);
-        }
-    };
-
-    let mut calls = quote! {};
-    let m = FIRES.lock().unwrap();
-
-    for (k, v) in m.iter() {
-        let fullname = &v.func;
-        let e = syn::parse_str::<syn::Expr>(fullname).unwrap();
-        let mut args = quote! {};
-        for i in 0..v.args.len() {
-            let ty = &v.args[i].ty;
-            let name = &v.args[i].name;
-            if ty == "Option < & str >" {
-                args.extend(quote! {
-                    if args[#i] == "__FIRE_THIS_IS_NONE" {
-                        None
-                    } else {
-                        Some(args[#i].as_str())
-                    },
-                });
-            } else if ty.starts_with("Option <") && ty.ends_with(">") {
-                args.extend(quote! {
-                    if args[#i] == "__FIRE_THIS_IS_NONE" {
-                        None
-                    } else {
-                        Some(args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str()))
-                    },
-                });
-            } else if ty == "& str" {
-                args.extend(quote! {
-                    if args[#i] == "__FIRE_THIS_IS_NONE" {
-                        panic!("arg '{}' not specified!", #name)
-                    } else {
-                        args[#i].as_str()
-                    },
-                });
+            let kind = if is_bool(&input.ty) {
+                ArgumentKind::Flag
+            } else if inner_type(&input.ty, "Option").is_some() {
+                ArgumentKind::Optional
             } else {
-                args.extend(quote! {
-                    if args[#i] == "__FIRE_THIS_IS_NONE" {
-                        panic!("arg '{}' not specified!", #name)
-                    } else {
-                        args[#i].parse().expect(format!("parse {} failed", args[#i]).as_str())
-                    },
-                });
-            }
-        }
-        let xxx = quote! {
-            if (cmd == #k) {
-                #e(#args);
-            }
-        };
+                ArgumentKind::Required
+            };
 
-        calls.extend(xxx);
+            Ok(Argument {
+                ident: pattern.ident.clone(),
+                ty: (*input.ty).clone(),
+                cli_name: kebab_case(&pattern.ident.to_string()),
+                kind,
+            })
+        })
+        .collect()
+}
+
+fn parsed_value(value: TokenStream2, ty: &Type, cli_name: &str) -> TokenStream2 {
+    if is_str_reference(ty) {
+        quote! { #value.as_str() }
+    } else {
+        quote! {
+            #value.parse::<#ty>().map_err(|_| {
+                format!("invalid value for '--{}': '{}'", #cli_name, #value)
+            })?
+        }
+    }
+}
+
+fn command_runner(
+    function: &ItemFn,
+    runner_name: &Ident,
+    visibility: TokenStream2,
+) -> syn::Result<TokenStream2> {
+    if function.sig.asyncness.is_some() {
+        return Err(syn::Error::new_spanned(
+            function.sig.asyncness,
+            "async commands are not supported",
+        ));
+    }
+    if !function.sig.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &function.sig.generics,
+            "generic commands are not supported",
+        ));
     }
 
-    let parse_and_dispatch = quote! {
-        fn __fire_run_with_args(m: Command, raw_args: Vec<String>) {
-            if m.len() == 0 {
-                panic!("no function registered");
-            }
+    let arguments = arguments(function)?;
+    let function_name = &function.sig.ident;
 
-            let (cmd, args) = parse_command(raw_args);
-            let mut pargs = parse_args(args).unwrap();
+    let storage = arguments.iter().map(|argument| {
+        let storage_name = format_ident!("__fire_value_{}", argument.ident);
+        quote! { let mut #storage_name: Option<String> = None; }
+    });
 
-            let subcommand = m.get(cmd.as_str()).expect("func not found");
-            let argdefs = &subcommand.args;
-
-            let mut args: Vec<String> = vec![];
-
-            for def in argdefs {
-                let mut found = false;
-                for (i, arg) in pargs.to_owned().iter().enumerate() {
-                    if arg.0 != def.name {
-                        continue;
+    let option_matches = arguments.iter().map(|argument| {
+        let storage_name = format_ident!("__fire_value_{}", argument.ident);
+        let cli_name = &argument.cli_name;
+        match argument.kind {
+            ArgumentKind::Flag => quote! {
+                if __fire_key == concat!("--", #cli_name) {
+                    if __fire_inline_value.is_some() {
+                        return Err(format!("flag '--{}' does not take a value", #cli_name));
                     }
-                    found = true;
-                    args.push(pargs[i].1.clone());
-                    pargs.remove(i);
+                    #storage_name = Some("true".to_string());
+                    __fire_matched = true;
                 }
-                if !found {
-                    args.push("__FIRE_THIS_IS_NONE".to_owned());
+            },
+            ArgumentKind::Required | ArgumentKind::Optional => quote! {
+                if __fire_key == concat!("--", #cli_name) {
+                    let value = match __fire_inline_value {
+                        Some(value) => value.to_string(),
+                        None => {
+                            __fire_index += 1;
+                            __fire_args.get(__fire_index).cloned().ok_or_else(|| {
+                                format!("option '--{}' requires a value", #cli_name)
+                            })?
+                        }
+                    };
+                    #storage_name = Some(value);
+                    __fire_matched = true;
                 }
-            }
-
-            if !pargs.is_empty() {
-                panic!("unexpected args: {}", pargs[0].0);
-            }
-
-            #calls
+            },
         }
-    };
+    });
 
-    let mut command_builder = quote! {
-        let mut m = Command::new();
-    };
-
-    for (key, subcommand) in m.iter() {
-        let func_name = &subcommand.func;
-
-        let args_vec = if subcommand.args.is_empty() {
-            quote! { vec![] }
-        } else {
-            let mut args_tokens = quote! {};
-            for arg in &subcommand.args {
-                let arg_name = &arg.name;
-                let arg_type = &arg.ty;
-                args_tokens.extend(quote! {
-                    Args {
-                        name: #arg_name.to_string(),
-                        ty: #arg_type.to_string(),
-                    },
-                });
+    let conversions = arguments.iter().map(|argument| {
+        let ident = &argument.ident;
+        let ty = &argument.ty;
+        let storage_name = format_ident!("__fire_value_{}", ident);
+        let cli_name = &argument.cli_name;
+        match argument.kind {
+            ArgumentKind::Flag => quote! {
+                let #ident: bool = #storage_name.is_some();
+            },
+            ArgumentKind::Optional => {
+                let inner = inner_type(ty, "Option").expect("optional type checked above");
+                if is_str_reference(inner) {
+                    quote! { let #ident: #ty = #storage_name.as_deref(); }
+                } else {
+                    let parsed = parsed_value(quote! { value }, inner, cli_name);
+                    quote! {
+                        let #ident: #ty = match #storage_name.as_ref() {
+                            Some(value) => Some(#parsed),
+                            None => None,
+                        };
+                    }
+                }
             }
-            quote! { vec![ #args_tokens ] }
-        };
+            ArgumentKind::Required => {
+                if is_str_reference(ty) {
+                    quote! {
+                        let #ident: #ty = #storage_name.as_deref().ok_or_else(|| {
+                            format!("missing required option '--{}'", #cli_name)
+                        })?;
+                    }
+                } else {
+                    let parsed = parsed_value(quote! { value }, ty, cli_name);
+                    quote! {
+                        let #ident: #ty = {
+                            let value = #storage_name.as_ref().ok_or_else(|| {
+                                format!("missing required option '--{}'", #cli_name)
+                            })?;
+                            #parsed
+                        };
+                    }
+                }
+            }
+        }
+    });
 
-        command_builder.extend(quote! {
-            m.insert(
-                #key.to_string(),
-                SubCommand {
-                    func: #func_name.to_string(),
-                    args: #args_vec,
-                },
-            );
-        });
+    let call_arguments = arguments.iter().map(|argument| &argument.ident);
+    let call = match &function.sig.output {
+        ReturnType::Type(_, ty) if inner_type(ty, "Result").is_some() => quote! {
+            #function_name(#(#call_arguments),*)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+        _ => quote! {
+            #function_name(#(#call_arguments),*);
+            Ok(())
+        },
+    };
+
+    Ok(quote! {
+        #[doc(hidden)]
+        #visibility fn #runner_name<I, S>(input: I) -> Result<(), String>
+        where
+            I: IntoIterator<Item = S>,
+            S: Into<String>,
+        {
+            let __fire_args: Vec<String> = input.into_iter().map(Into::into).collect();
+            #(#storage)*
+
+            let mut __fire_index = 0usize;
+            while __fire_index < __fire_args.len() {
+                let __fire_raw = &__fire_args[__fire_index];
+                let (__fire_key, __fire_inline_value) = match __fire_raw.split_once('=') {
+                    Some((key, value)) => (key, Some(value)),
+                    None => (__fire_raw.as_str(), None),
+                };
+                let mut __fire_matched = false;
+                #(#option_matches)*
+                if !__fire_matched {
+                    return Err(format!("unexpected argument '{}'", __fire_raw));
+                }
+                __fire_index += 1;
+            }
+
+            #(#conversions)*
+            #call
+        }
+    })
+}
+
+fn entrypoint(call: TokenStream2) -> TokenStream2 {
+    quote! {
+        fn main() {
+            if let Err(error) = #call {
+                eprintln!("error: {}", error);
+                std::process::exit(2);
+            }
+        }
+    }
+}
+
+fn expand_function(function: ItemFn) -> syn::Result<TokenStream2> {
+    if function.sig.ident == "main" {
+        return Err(syn::Error::new_spanned(
+            &function.sig.ident,
+            "put #[fire::main] on the command function, not on a function named `main`",
+        ));
+    }
+    let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
+    let runner = command_runner(&function, &runner_name, quote! { pub(crate) })?;
+    let main = entrypoint(quote! { #runner_name(std::env::args().skip(1)) });
+    Ok(quote! { #function #runner #main })
+}
+
+fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
+    let module_name = module.ident.clone();
+    let Some((_, items)) = &mut module.content else {
+        return Err(syn::Error::new_spanned(
+            &module,
+            "#[fire::main] requires an inline module",
+        ));
+    };
+
+    let mut commands = Vec::new();
+    let mut runners = Vec::new();
+    for item in items.iter() {
+        let Item::Fn(function) = item else {
+            continue;
+        };
+        let command_name = kebab_case(&function.sig.ident.to_string());
+        let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
+        runners.push(command_runner(function, &runner_name, quote! {})?);
+        commands.push((command_name, runner_name));
     }
 
-    quote! {{
-        #defs
-        #parse_and_dispatch
-        #command_builder
-        __fire_run_with_args(m, #injected_args);
-    }}
-    .into()
+    for runner in runners {
+        items.push(syn::parse2(runner).expect("generated command runner"));
+    }
+    let dispatch = commands.iter().map(|(command_name, runner_name)| {
+        quote! { #command_name => #runner_name(arguments), }
+    });
+    items.push(
+        syn::parse2(quote! {
+            #[doc(hidden)]
+            pub(crate) fn __fire_run<I, S>(input: I) -> Result<(), String>
+            where
+                I: IntoIterator<Item = S>,
+                S: Into<String>,
+            {
+                let mut input = input.into_iter().map(Into::into);
+                let command = input.next().ok_or_else(|| "missing command".to_string())?;
+                let arguments: Vec<String> = input.collect();
+                match command.as_str() {
+                    #(#dispatch)*
+                    _ => Err(format!("unknown command '{}'", command)),
+                }
+            }
+        })
+        .expect("generated command dispatcher"),
+    );
+
+    let main = entrypoint(quote! { #module_name::__fire_run(std::env::args().skip(1)) });
+    Ok(quote! { #module #main })
 }
 
-#[proc_macro]
-pub fn run(_: TokenStream) -> TokenStream {
-    expand_run(TokenStream::new(), true)
-}
-
-#[proc_macro]
-pub fn run_with_args(input: TokenStream) -> TokenStream {
-    expand_run(input, false)
+/// Turns a function or inline module into a complete command-line application.
+#[proc_macro_attribute]
+pub fn main(_metadata: TokenStream, input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as Item);
+    let expanded = match item {
+        Item::Fn(function) => expand_function(function),
+        Item::Mod(module) => expand_module(module),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "#[fire::main] only supports functions and inline modules",
+        )),
+    };
+    expanded
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
