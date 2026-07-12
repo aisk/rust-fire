@@ -193,7 +193,7 @@ fn parsed_value(value: TokenStream2, ty: &Type, cli_name: &str) -> TokenStream2 
     } else {
         quote! {
             #value.parse::<#ty>().map_err(|_| {
-                format!("invalid value for '--{}': '{}'", #cli_name, #value)
+                __fire_error(format!("invalid value for '--{}': '{}'", #cli_name, #value))
             })?
         }
     }
@@ -221,6 +221,11 @@ fn command_runner(
     let arguments = arguments(function)?;
     let function_name = &function.sig.ident;
     let help = command_help(function, &arguments, command_name);
+    let usage = help
+        .lines()
+        .find(|line| line.starts_with("Usage:"))
+        .expect("command help always contains usage")
+        .to_string();
     let program_name = program_name();
 
     let storage = arguments.iter().map(|argument| {
@@ -235,7 +240,7 @@ fn command_runner(
             ArgumentKind::Flag => quote! {
                 if __fire_key == concat!("--", #cli_name) {
                     if __fire_inline_value.is_some() {
-                        return Err(format!("flag '--{}' does not take a value", #cli_name));
+                        return Err(__fire_error(format!("flag '--{}' does not take a value", #cli_name)));
                     }
                     #storage_name = Some("true".to_string());
                     __fire_matched = true;
@@ -248,7 +253,7 @@ fn command_runner(
                         None => {
                             __fire_index += 1;
                             __fire_args.get(__fire_index).cloned().ok_or_else(|| {
-                                format!("option '--{}' requires a value", #cli_name)
+                                __fire_error(format!("option '--{}' requires a value", #cli_name))
                             })?
                         }
                     };
@@ -286,7 +291,7 @@ fn command_runner(
                 if is_str_reference(ty) {
                     quote! {
                         let #ident: #ty = #storage_name.as_deref().ok_or_else(|| {
-                            format!("missing required option '--{}'", #cli_name)
+                            __fire_error(format!("missing required option '--{}'", #cli_name))
                         })?;
                     }
                 } else {
@@ -294,7 +299,7 @@ fn command_runner(
                     quote! {
                         let #ident: #ty = {
                             let value = #storage_name.as_ref().ok_or_else(|| {
-                                format!("missing required option '--{}'", #cli_name)
+                                __fire_error(format!("missing required option '--{}'", #cli_name))
                             })?;
                             #parsed
                         };
@@ -325,10 +330,18 @@ fn command_runner(
             S: Into<String>,
         {
             let __fire_args: Vec<String> = input.into_iter().map(Into::into).collect();
+            let program = #program_name;
+            let __fire_help = #help.replace("{program}", &program);
+            let __fire_usage = #usage.replace("{program}", &program);
             if __fire_args.iter().any(|argument| argument == "--help" || argument == "-h") {
-                let program = #program_name;
-                return Ok(Some(#help.replace("{program}", &program)));
+                return Ok(Some(__fire_help));
             }
+            let __fire_error = |message: String| {
+                format!(
+                    "{}\n\n{}\n\nFor more information, try '--help'.",
+                    message, __fire_usage
+                )
+            };
             #(#storage)*
 
             let mut __fire_index = 0usize;
@@ -341,7 +354,7 @@ fn command_runner(
                 let mut __fire_matched = false;
                 #(#option_matches)*
                 if !__fire_matched {
-                    return Err(format!("unexpected argument '{}'", __fire_raw));
+                    return Err(__fire_error(format!("unexpected argument '{}'", __fire_raw)));
                 }
                 __fire_index += 1;
             }
@@ -439,6 +452,11 @@ fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
         root_help.push('\n');
     }
     root_help.push_str("\nOptions:\n    -h, --help    Print help");
+    let root_usage = root_help
+        .lines()
+        .find(|line| line.starts_with("Usage:"))
+        .expect("root help always contains usage")
+        .to_string();
     let program_name = program_name();
     items.push(
         syn::parse2(quote! {
@@ -446,18 +464,28 @@ fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
             pub(crate) fn __fire_run<I, S>(input: I) -> Result<Option<String>, String>
             where
                 I: IntoIterator<Item = S>,
-                S: Into<String>,
+            S: Into<String>,
             {
                 let mut input = input.into_iter().map(Into::into);
-                let command = input.next().ok_or_else(|| "missing command".to_string())?;
+                let program = #program_name;
+                let __fire_help = #root_help.replace("{program}", &program);
+                let __fire_usage = #root_usage.replace("{program}", &program);
+                let __fire_error = |message: String| {
+                    format!(
+                        "{}\n\n{}\n\nFor more information, try '--help'.",
+                        message, __fire_usage
+                    )
+                };
+                let command = input
+                    .next()
+                    .ok_or_else(|| __fire_error("missing command".to_string()))?;
                 if command == "--help" || command == "-h" {
-                    let program = #program_name;
-                    return Ok(Some(#root_help.replace("{program}", &program)));
+                    return Ok(Some(__fire_help));
                 }
                 let arguments: Vec<String> = input.collect();
                 match command.as_str() {
                     #(#dispatch)*
-                    _ => Err(format!("unknown command '{}'", command)),
+                    _ => Err(__fire_error(format!("unknown command '{}'", command))),
                 }
             }
         })

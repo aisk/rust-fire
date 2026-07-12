@@ -79,14 +79,15 @@ fn module_functions_become_kebab_case_subcommands() {
 
 #[test]
 fn errors_are_descriptive() {
-    assert_eq!(
-        single_command::run(["--age", "22"]).unwrap_err(),
-        "missing required option '--name'"
-    );
-    assert_eq!(
-        command_group::run(["missing"]).unwrap_err(),
-        "unknown command 'missing'"
-    );
+    let argument_error = single_command::run(["--age", "22"]).unwrap_err();
+    assert!(argument_error.starts_with("missing required option '--name'"));
+    assert!(argument_error.contains("Usage:"));
+    assert!(argument_error.contains("For more information, try '--help'."));
+
+    let command_error = command_group::run(["missing"]).unwrap_err();
+    assert!(command_error.starts_with("unknown command 'missing'"));
+    assert!(command_error.contains("Usage:"));
+    assert!(command_error.contains("For more information, try '--help'."));
 }
 
 #[test]
