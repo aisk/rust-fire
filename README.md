@@ -11,6 +11,7 @@ cargo add fire
 ## One function
 
 ```rust
+/// Welcome a person.
 #[fire::main]
 fn welcome(name: String, excited: bool) {
     let suffix = if excited { "!" } else { "." };
@@ -25,6 +26,37 @@ Welcome, John Smith!
 
 `#[fire::main]` generates the program entry point, so no separate `fn main()` or
 registration call is needed.
+
+## Help
+
+`-h` and `--help` are generated automatically from the function signature and
+documentation comments:
+
+```rust
+/// Start the HTTP server.
+#[fire::main]
+fn serve(
+    /// Address to listen on.
+    host: String,
+    /// Enable verbose logging.
+    verbose: bool,
+) {}
+```
+
+```console
+$ app --help
+Start the HTTP server.
+
+Usage: app --host <HOST> [--verbose]
+
+Options:
+    --host <HOST>    Address to listen on.
+    --verbose        Enable verbose logging.
+    -h, --help       Print help
+```
+
+For module applications, `app --help` lists the subcommands and
+`app <COMMAND> --help` describes one subcommand.
 
 ## Subcommands
 
