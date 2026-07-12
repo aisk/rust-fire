@@ -252,9 +252,16 @@ fn command_runner(
                         Some(value) => value.to_string(),
                         None => {
                             __fire_index += 1;
-                            __fire_args.get(__fire_index).cloned().ok_or_else(|| {
+                            let value = __fire_args.get(__fire_index).cloned().ok_or_else(|| {
                                 __fire_error(format!("option '--{}' requires a value", #cli_name))
-                            })?
+                            })?;
+                            if value.starts_with("--") || value == "-h" {
+                                return Err(__fire_error(format!(
+                                    "option '--{}' requires a value",
+                                    #cli_name
+                                )));
+                            }
+                            value
                         }
                     };
                     #storage_name = Some(value);

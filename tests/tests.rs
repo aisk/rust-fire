@@ -91,6 +91,13 @@ fn errors_are_descriptive() {
 }
 
 #[test]
+fn option_is_not_consumed_as_another_options_value() {
+    let error = single_command::run(["--name", "--verbose", "--age", "22"]).unwrap_err();
+    assert!(error.starts_with("option '--name' requires a value"));
+    assert!(error.contains("Usage:"));
+}
+
+#[test]
 fn function_help_uses_signature_and_documentation() {
     let help = single_command::run(["--help"]).unwrap().unwrap();
     assert!(help.contains("Greet a person."));
