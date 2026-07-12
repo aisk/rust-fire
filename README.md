@@ -2,6 +2,10 @@
 
 [![Documentation](https://docs.rs/fire/badge.svg)](https://docs.rs/fire)
 
+![](https://repository-images.githubusercontent.com/122919956/bf2aa6f1-3fa7-446a-b389-cf34ecbe68a0)
+
+*Image by [T5](https://weibo.com/579027700), source: https://www.pixiv.net/artworks/104959772*
+
 Turn a Rust function or module into a command-line application with one attribute.
 
 ## Installation
