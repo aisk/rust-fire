@@ -104,10 +104,29 @@
 //! }
 //! ```
 //!
+//! # Async commands
+//!
+//! Passing `tokio` to the attribute lets commands be `async`. Each async
+//! command runs on a multi-threaded Tokio runtime, so the application must
+//! depend on [`tokio`](https://docs.rs/tokio) with the `rt-multi-thread`
+//! feature:
+//!
+//! ```no_run
+//! /// Fetch a URL.
+//! #[fire::main(tokio)]
+//! async fn fetch(url: String) {
+//!     // .await freely here
+//! }
+//! ```
+//!
+//! The same argument works on modules; async and synchronous commands can be
+//! mixed in one module.
+//!
 //! # Current limitations
 //!
 //! - Command modules must be inline modules.
-//! - Methods, generic functions, and async functions are not supported.
+//! - Methods and generic functions are not supported.
+//! - Async functions require `#[fire::main(tokio)]`.
 //! - Parameters are named options; positional arguments and short option names
 //!   are not currently supported.
 //! - Parameter attributes other than documentation comments are rejected.
@@ -318,11 +337,12 @@ fn command_runner(
     runner_name: &Ident,
     visibility: TokenStream2,
     command_name: &str,
+    tokio: bool,
 ) -> syn::Result<TokenStream2> {
-    if function.sig.asyncness.is_some() {
+    if function.sig.asyncness.is_some() && !tokio {
         return Err(syn::Error::new_spanned(
             function.sig.asyncness,
-            "async commands are not supported",
+            "async commands require a runtime; use #[fire::main(tokio)]",
         ));
     }
     if !function.sig.generics.params.is_empty() {
@@ -431,14 +451,24 @@ fn command_runner(
     });
 
     let call_arguments = arguments.iter().map(|argument| &argument.ident);
+    let mut invocation = quote! { #function_name(#(#call_arguments),*) };
+    if function.sig.asyncness.is_some() {
+        invocation = quote! {
+            ::tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime")
+                .block_on(#invocation)
+        };
+    }
     let call = match &function.sig.output {
         ReturnType::Type(_, ty) if inner_type(ty, "Result").is_some() => quote! {
-            #function_name(#(#call_arguments),*)
+            #invocation
                 .map(|_| None)
                 .map_err(|error| error.to_string())
         },
         _ => quote! {
-            #function_name(#(#call_arguments),*);
+            #invocation;
             Ok(None)
         },
     };
@@ -501,7 +531,7 @@ fn entrypoint(call: TokenStream2) -> TokenStream2 {
     }
 }
 
-fn expand_function(mut function: ItemFn) -> syn::Result<TokenStream2> {
+fn expand_function(mut function: ItemFn, tokio: bool) -> syn::Result<TokenStream2> {
     if function.sig.ident == "main" {
         return Err(syn::Error::new_spanned(
             &function.sig.ident,
@@ -509,12 +539,12 @@ fn expand_function(mut function: ItemFn) -> syn::Result<TokenStream2> {
         ));
     }
     let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
-    let runner = command_runner(&mut function, &runner_name, quote! { pub(crate) }, "")?;
+    let runner = command_runner(&mut function, &runner_name, quote! { pub(crate) }, "", tokio)?;
     let main = entrypoint(quote! { #runner_name(std::env::args().skip(1)) });
     Ok(quote! { #function #runner #main })
 }
 
-fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
+fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> {
     let module_name = module.ident.clone();
     let module_description = documentation(&module.attrs);
     let Some((_, items)) = &mut module.content else {
@@ -537,6 +567,7 @@ fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
             &runner_name,
             quote! {},
             &command_name,
+            tokio,
         )?);
         commands.push((command_name, runner_name));
     }
@@ -660,12 +691,38 @@ fn expand_module(mut module: ItemMod) -> syn::Result<TokenStream2> {
 ///     pub fn stop(name: String) {}
 /// }
 /// ```
+///
+/// # Async
+///
+/// `#[fire::main(tokio)]` additionally accepts `async` commands and runs each
+/// one on a multi-threaded Tokio runtime. The application must depend on
+/// `tokio` with the `rt-multi-thread` feature.
+///
+/// ```no_run
+/// /// Fetch a URL.
+/// #[fire::main(tokio)]
+/// async fn fetch(url: String) {}
+/// ```
 #[proc_macro_attribute]
-pub fn main(_metadata: TokenStream, input: TokenStream) -> TokenStream {
+pub fn main(metadata: TokenStream, input: TokenStream) -> TokenStream {
+    let tokio = if metadata.is_empty() {
+        false
+    } else {
+        let runtime = parse_macro_input!(metadata as Ident);
+        if runtime != "tokio" {
+            return syn::Error::new_spanned(
+                &runtime,
+                format!("unsupported runtime `{runtime}`; only `tokio` is supported"),
+            )
+            .into_compile_error()
+            .into();
+        }
+        true
+    };
     let item = parse_macro_input!(input as Item);
     let expanded = match item {
-        Item::Fn(function) => expand_function(function),
-        Item::Mod(module) => expand_module(module),
+        Item::Fn(function) => expand_function(function, tokio),
+        Item::Mod(module) => expand_module(module, tokio),
         other => Err(syn::Error::new_spanned(
             other,
             "#[fire::main] only supports functions and inline modules",

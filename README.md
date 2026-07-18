@@ -124,6 +124,24 @@ fn deploy(target: String) -> Result<(), DeployError> {
 }
 ```
 
+## Async
+
+Pass `tokio` to the attribute to write `async` commands. Each async command
+runs on a multi-threaded Tokio runtime, so add `tokio` with the
+`rt-multi-thread` feature to your application:
+
+```rust
+/// Fetch a URL.
+#[fire::main(tokio)]
+async fn fetch(url: String) {
+    let body = reqwest::get(&url).await.unwrap();
+    // ...
+}
+```
+
+The same works on modules, and async and synchronous commands can be mixed in
+one module.
+
 ## License
 
 BSD-2-Clause.

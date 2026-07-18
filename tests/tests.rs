@@ -58,23 +58,97 @@ mod command_group {
     }
 }
 
-fn take_call() -> String {
-    CALLS.lock().unwrap().pop().unwrap()
+#[allow(dead_code)]
+mod async_single_command {
+    /// Greet a person asynchronously.
+    #[fire::main(tokio)]
+    async fn hello(name: String) {
+        tokio::task::yield_now().await;
+        super::CALLS
+            .lock()
+            .unwrap()
+            .push(format!("async-hello:{name}"));
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        __fire_run_hello(args)
+    }
+}
+
+#[allow(dead_code)]
+mod async_command_group {
+    /// Network commands.
+    #[fire::main(tokio)]
+    mod cli {
+        /// Ping a host.
+        pub async fn ping(host: String) -> Result<(), String> {
+            if host == "unreachable" {
+                return Err("host is unreachable".to_string());
+            }
+            tokio::task::yield_now().await;
+            super::super::CALLS.lock().unwrap().push(format!("ping:{host}"));
+            Ok(())
+        }
+
+        /// Show the version.
+        pub fn version() {
+            super::super::CALLS.lock().unwrap().push("version".to_string());
+        }
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        cli::__fire_run(args)
+    }
+}
+
+fn assert_called(expected: &str) {
+    let mut calls = CALLS.lock().unwrap();
+    let index = calls
+        .iter()
+        .position(|call| call == expected)
+        .unwrap_or_else(|| panic!("no call recorded matching '{expected}'"));
+    calls.remove(index);
 }
 
 #[test]
 fn function_becomes_cli() {
     single_command::run(["--name", "John", "--age=22", "--verbose"]).unwrap();
-    assert_eq!(take_call(), "John:22:None:true");
+    assert_called("John:22:None:true");
 }
 
 #[test]
 fn module_functions_become_kebab_case_subcommands() {
     command_group::run(["say-hello", "--name", "John"]).unwrap();
-    assert_eq!(take_call(), "hello:John");
+    assert_called("hello:John");
 
     command_group::run(["bye"]).unwrap();
-    assert_eq!(take_call(), "bye");
+    assert_called("bye");
+}
+
+#[test]
+fn async_function_becomes_cli() {
+    async_single_command::run(["--name", "John"]).unwrap();
+    assert_called("async-hello:John");
+}
+
+#[test]
+fn async_module_mixes_async_and_sync_commands() {
+    async_command_group::run(["ping", "--host", "localhost"]).unwrap();
+    assert_called("ping:localhost");
+
+    async_command_group::run(["version"]).unwrap();
+    assert_called("version");
+
+    let error = async_command_group::run(["ping", "--host", "unreachable"]).unwrap_err();
+    assert_eq!(error, "host is unreachable");
 }
 
 #[test]
