@@ -96,8 +96,9 @@
 //!
 //! # Fallible commands
 //!
-//! Commands may return `Result`. An error is formatted through
-//! [`Display`](std::fmt::Display), printed to stderr, and causes status code 2:
+//! A command returns either `()` or `Result<_, E>` where `E` implements
+//! [`Display`](std::fmt::Display). An error is formatted through `Display`,
+//! printed to stderr, and causes status code 2:
 //!
 //! ```no_run
 //! #[fire::main]
@@ -108,6 +109,20 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! The return value is dispatched through a trait rather than by matching on
+//! the return type, so type aliases work as well:
+//!
+//! ```no_run
+//! type Fallible<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+//!
+//! #[fire::main]
+//! fn deploy(target: String) -> Fallible<()> {
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Any other return type is rejected at compile time.
 //!
 //! # Async commands
 //!
@@ -132,6 +147,8 @@
 //! - Command modules must be inline modules, and only their `pub` functions
 //!   become subcommands.
 //! - Methods and generic functions are not supported.
+//! - A command returns `()` or `Result<_, E>` where `E: Display`; any other
+//!   return type is a compile error.
 //! - Async functions require `#[fire::main(tokio)]`.
 //! - Parameters are named options; positional arguments and short option names
 //!   are not currently supported.
@@ -139,10 +156,10 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{
-    parse_macro_input, Attribute, Expr, FnArg, Item, ItemFn, ItemMod, Lit, Meta, Pat, ReturnType,
-    Type, Visibility,
+    parse_macro_input, spanned::Spanned, Attribute, Expr, File, FnArg, Item, ItemFn, ItemMod, Lit,
+    Meta, Pat, ReturnType, Type, Visibility,
 };
 
 struct Argument {
@@ -366,6 +383,46 @@ fn parsed_value(value: TokenStream2, ty: &Type, cli_name: &str) -> TokenStream2 
     }
 }
 
+/// A command's return value is reported through a generated trait rather than
+/// by inspecting the return type syntactically, so that type aliases such as
+/// `anyhow::Result<()>` or a local `type Fallible<T>` are handled correctly.
+fn output_trait() -> TokenStream2 {
+    quote! {
+        #[doc(hidden)]
+        #[diagnostic::on_unimplemented(
+            message = "`{Self}` cannot be returned from a #[fire::main] command",
+            label = "a command must return `()` or `Result<_, E>` where `E: Display`"
+        )]
+        trait __FireOutput {
+            fn __fire_report(self) -> Result<(), String>;
+        }
+
+        impl __FireOutput for () {
+            fn __fire_report(self) -> Result<(), String> {
+                Ok(())
+            }
+        }
+
+        impl<T, E> __FireOutput for Result<T, E>
+        where
+            E: std::fmt::Display,
+        {
+            fn __fire_report(self) -> Result<(), String> {
+                self.map(|_| ()).map_err(|error| error.to_string())
+            }
+        }
+    }
+}
+
+/// Whether a command's return value has to be reported through
+/// [`output_trait`]. Diverging commands never return, so they need no report.
+fn reports_output(function: &ItemFn) -> bool {
+    match &function.sig.output {
+        ReturnType::Default => false,
+        ReturnType::Type(_, ty) => !matches!(**ty, Type::Never(_)),
+    }
+}
+
 fn command_runner(
     function: &mut ItemFn,
     runner_name: &Ident,
@@ -517,12 +574,16 @@ fn command_runner(
         };
     }
     let call = match &function.sig.output {
-        ReturnType::Type(_, ty) if inner_type(ty, "Result").is_some() => quote! {
-            #invocation
-                .map(|_| None)
-                .map_err(|error| error.to_string())
-        },
-        _ => quote! {
+        // A diverging command never returns, so `!` coerces to the runner's
+        // own return type.
+        ReturnType::Type(_, ty) if matches!(**ty, Type::Never(_)) => quote! { #invocation },
+        ReturnType::Type(_, ty) => {
+            let report = quote_spanned! { ty.span() =>
+                __FireOutput::__fire_report(#invocation)
+            };
+            quote! { #report.map(|_| None) }
+        }
+        ReturnType::Default => quote! {
             #invocation;
             Ok(None)
         },
@@ -606,9 +667,14 @@ fn expand_function(mut function: ItemFn, tokio: bool) -> syn::Result<TokenStream
         ));
     }
     let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
+    let output = if reports_output(&function) {
+        output_trait()
+    } else {
+        TokenStream2::new()
+    };
     let runner = command_runner(&mut function, &runner_name, quote! { pub(crate) }, "", tokio)?;
     let main = entrypoint(quote! { #runner_name(std::env::args_os().skip(1)) });
-    Ok(quote! { #function #runner #main })
+    Ok(quote! { #function #output #runner #main })
 }
 
 fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> {
@@ -623,6 +689,7 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
 
     let mut commands = Vec::new();
     let mut runners = Vec::new();
+    let mut reports_any_output = false;
     for item in items.iter_mut() {
         let Item::Fn(function) = item else {
             continue;
@@ -633,6 +700,7 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         let command_name = kebab_case(&function.sig.ident.to_string());
         let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
         let description = documentation(&function.attrs).replace('\n', " ");
+        reports_any_output |= reports_output(function);
         runners.push(command_runner(
             function,
             &runner_name,
@@ -643,6 +711,10 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         commands.push((command_name, runner_name, description));
     }
 
+    if reports_any_output {
+        let output: File = syn::parse2(output_trait()).expect("generated output trait");
+        items.extend(output.items);
+    }
     for runner in runners {
         items.push(syn::parse2(runner).expect("generated command runner"));
     }
@@ -728,6 +800,10 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
 /// - `Option<T>` is an optional named option;
 /// - `bool` is a value-less flag;
 /// - `&str` borrows its value for the duration of the command call.
+///
+/// A command returns `()` or `Result<_, E>` where `E` implements
+/// [`Display`](std::fmt::Display); any other return type is rejected at
+/// compile time.
 ///
 /// Documentation comments on the target and its parameters are included in
 /// the generated `-h`/`--help` output. See the [crate-level documentation](crate)
