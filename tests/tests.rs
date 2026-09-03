@@ -172,6 +172,16 @@ fn option_is_not_consumed_as_another_options_value() {
 }
 
 #[test]
+fn help_flag_is_not_detected_inside_an_option_value() {
+    let output = single_command::run(["--name=-h", "--age=1"]).unwrap();
+    assert!(
+        output.is_none(),
+        "expected the command to run, got help output"
+    );
+    assert_called("-h:1:None:false");
+}
+
+#[test]
 fn function_help_uses_signature_and_documentation() {
     let help = single_command::run(["--help"]).unwrap().unwrap();
     assert!(help.contains("Greet a person."));

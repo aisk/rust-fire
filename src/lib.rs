@@ -356,6 +356,15 @@ fn command_runner(
     }
 
     let arguments = arguments(function)?;
+    if let Some(argument) = arguments
+        .iter()
+        .find(|argument| argument.cli_name == "help")
+    {
+        return Err(syn::Error::new(
+            argument.ident.span(),
+            "parameter `help` collides with the generated `--help` option",
+        ));
+    }
     let function_name = &function.sig.ident;
     let help = command_help(function, &arguments, command_name);
     let usage = help
@@ -487,9 +496,6 @@ fn command_runner(
             let program = #program_name;
             let __fire_help = #help.replace("{program}", &program);
             let __fire_usage = #usage.replace("{program}", &program);
-            if __fire_args.iter().any(|argument| argument == "--help" || argument == "-h") {
-                return Ok(Some(__fire_help));
-            }
             let __fire_error = |message: String| {
                 format!(
                     "{}\n\n{}\n\nFor more information, try '--help'.",
@@ -505,6 +511,9 @@ fn command_runner(
                     Some((key, value)) => (key, Some(value)),
                     None => (__fire_raw.as_str(), None),
                 };
+                if __fire_key == "--help" || __fire_key == "-h" {
+                    return Ok(Some(__fire_help));
+                }
                 let mut __fire_matched = false;
                 #(#option_matches)*
                 if !__fire_matched {
