@@ -68,9 +68,9 @@
 //! | `&str` | Borrowed string option |
 //!
 //! Every non-string value is parsed through [`FromStr`](std::str::FromStr).
-//! A parse failure, missing value, unknown option, or unknown command is
-//! reported on stderr together with the relevant usage line. CLI errors exit
-//! with status code 2.
+//! A parse failure, missing value, unknown option, unknown command, or
+//! argument that is not valid UTF-8 is reported on stderr together with the
+//! relevant usage line. CLI errors exit with status code 2.
 //!
 //! # Generated help
 //!
@@ -312,7 +312,7 @@ fn command_help(function: &ItemFn, arguments: &[Argument], command_name: &str) -
 
 fn program_name() -> TokenStream2 {
     quote! {
-        std::env::args()
+        std::env::args_os()
             .next()
             .and_then(|path| {
                 std::path::Path::new(&path)
@@ -490,9 +490,8 @@ fn command_runner(
         #visibility fn #runner_name<I, S>(input: I) -> Result<Option<String>, String>
         where
             I: IntoIterator<Item = S>,
-            S: Into<String>,
+            S: Into<std::ffi::OsString>,
         {
-            let __fire_args: Vec<String> = input.into_iter().map(Into::into).collect();
             let program = #program_name;
             let __fire_help = #help.replace("{program}", &program);
             let __fire_usage = #usage.replace("{program}", &program);
@@ -502,6 +501,19 @@ fn command_runner(
                     message, __fire_usage
                 )
             };
+            let mut __fire_args: Vec<String> = Vec::new();
+            for __fire_argument in input {
+                let __fire_argument: std::ffi::OsString = __fire_argument.into();
+                match __fire_argument.into_string() {
+                    Ok(__fire_argument) => __fire_args.push(__fire_argument),
+                    Err(__fire_argument) => {
+                        return Err(__fire_error(format!(
+                            "argument '{}' is not valid UTF-8",
+                            __fire_argument.to_string_lossy()
+                        )));
+                    }
+                }
+            }
             #(#storage)*
 
             let mut __fire_index = 0usize;
@@ -552,7 +564,7 @@ fn expand_function(mut function: ItemFn, tokio: bool) -> syn::Result<TokenStream
     }
     let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
     let runner = command_runner(&mut function, &runner_name, quote! { pub(crate) }, "", tokio)?;
-    let main = entrypoint(quote! { #runner_name(std::env::args().skip(1)) });
+    let main = entrypoint(quote! { #runner_name(std::env::args_os().skip(1)) });
     Ok(quote! { #function #runner #main })
 }
 
@@ -631,9 +643,11 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
             pub(crate) fn __fire_run<I, S>(input: I) -> Result<Option<String>, String>
             where
                 I: IntoIterator<Item = S>,
-            S: Into<String>,
+            S: Into<std::ffi::OsString>,
             {
-                let mut input = input.into_iter().map(Into::into);
+                let mut input = input
+                    .into_iter()
+                    .map(|argument| -> std::ffi::OsString { argument.into() });
                 let program = #program_name;
                 let __fire_help = #root_help.replace("{program}", &program);
                 let __fire_usage = #root_usage.replace("{program}", &program);
@@ -646,10 +660,16 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
                 let command = input
                     .next()
                     .ok_or_else(|| __fire_error("missing command".to_string()))?;
+                let command = command.into_string().map_err(|command| {
+                    __fire_error(format!(
+                        "command '{}' is not valid UTF-8",
+                        command.to_string_lossy()
+                    ))
+                })?;
                 if command == "--help" || command == "-h" {
                     return Ok(Some(__fire_help));
                 }
-                let arguments: Vec<String> = input.collect();
+                let arguments: Vec<std::ffi::OsString> = input.collect();
                 match command.as_str() {
                     #(#dispatch)*
                     _ => Err(__fire_error(format!("unknown command '{}'", command))),
@@ -659,7 +679,7 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         .expect("generated command dispatcher"),
     );
 
-    let main = entrypoint(quote! { #module_name::__fire_run(std::env::args().skip(1)) });
+    let main = entrypoint(quote! { #module_name::__fire_run(std::env::args_os().skip(1)) });
     Ok(quote! { #module #main })
 }
 

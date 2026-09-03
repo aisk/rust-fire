@@ -24,7 +24,7 @@ mod single_command {
     pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: Into<std::ffi::OsString>,
     {
         __fire_run_hello(args)
     }
@@ -52,7 +52,7 @@ mod command_group {
     pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: Into<std::ffi::OsString>,
     {
         cli::__fire_run(args)
     }
@@ -73,7 +73,7 @@ mod async_single_command {
     pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: Into<std::ffi::OsString>,
     {
         __fire_run_hello(args)
     }
@@ -103,7 +103,7 @@ mod async_command_group {
     pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: Into<std::ffi::OsString>,
     {
         cli::__fire_run(args)
     }
@@ -179,6 +179,17 @@ fn help_flag_is_not_detected_inside_an_option_value() {
         "expected the command to run, got help output"
     );
     assert_called("-h:1:None:false");
+}
+
+#[cfg(unix)]
+#[test]
+fn arguments_that_are_not_valid_utf8_are_reported() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let invalid = std::ffi::OsString::from_vec(vec![0x2d, 0x2d, 0xff]);
+    let error = single_command::run([invalid]).unwrap_err();
+    assert!(error.contains("is not valid UTF-8"), "got: {error}");
+    assert!(error.contains("Usage:"));
 }
 
 #[test]
