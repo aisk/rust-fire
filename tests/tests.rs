@@ -205,6 +205,22 @@ fn help_flag_is_not_detected_inside_an_option_value() {
 }
 
 #[test]
+fn repeated_options_are_rejected() {
+    let error = single_command::run(["--name", "John", "--name", "Jane", "--age=1"]).unwrap_err();
+    assert!(error.starts_with("option '--name' is given more than once"));
+
+    let error =
+        single_command::run(["--name=John", "--age=1", "--verbose", "--verbose"]).unwrap_err();
+    assert!(error.starts_with("flag '--verbose' is given more than once"));
+}
+
+#[test]
+fn option_like_values_suggest_the_inline_form() {
+    let error = single_command::run(["--name", "--verbose", "--age", "22"]).unwrap_err();
+    assert!(error.contains("write '--name=--verbose'"), "got: {error}");
+}
+
+#[test]
 fn raw_identifiers_drop_their_prefix() {
     raw_identifier_command::run(["type", "--struct", "Point"]).unwrap();
     assert_called("type:Point");

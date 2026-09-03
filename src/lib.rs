@@ -68,9 +68,12 @@
 //! | `&str` | Borrowed string option |
 //!
 //! Every non-string value is parsed through [`FromStr`](std::str::FromStr).
-//! A parse failure, missing value, unknown option, unknown command, or
-//! argument that is not valid UTF-8 is reported on stderr together with the
-//! relevant usage line. CLI errors exit with status code 2.
+//! A parse failure, missing value, repeated option, unknown option, unknown
+//! command, or argument that is not valid UTF-8 is reported on stderr together
+//! with the relevant usage line. CLI errors exit with status code 2.
+//!
+//! A value that starts with `-` is never taken from the next argument, so it
+//! has to be written as `--name=-1`.
 //!
 //! # Generated help
 //!
@@ -416,12 +419,24 @@ fn command_runner(
                     if __fire_inline_value.is_some() {
                         return Err(__fire_error(format!("flag '--{}' does not take a value", #cli_name)));
                     }
+                    if #storage_name.is_some() {
+                        return Err(__fire_error(format!(
+                            "flag '--{}' is given more than once",
+                            #cli_name
+                        )));
+                    }
                     #storage_name = Some("true".to_string());
                     __fire_matched = true;
                 }
             },
             ArgumentKind::Required | ArgumentKind::Optional => quote! {
                 if __fire_key == concat!("--", #cli_name) {
+                    if #storage_name.is_some() {
+                        return Err(__fire_error(format!(
+                            "option '--{}' is given more than once",
+                            #cli_name
+                        )));
+                    }
                     let value = match __fire_inline_value {
                         Some(value) => value.to_string(),
                         None => {
@@ -431,8 +446,8 @@ fn command_runner(
                             })?;
                             if value.starts_with("--") || value == "-h" {
                                 return Err(__fire_error(format!(
-                                    "option '--{}' requires a value",
-                                    #cli_name
+                                    "option '--{}' requires a value, found '{}'; write '--{}={}' to use it as the value",
+                                    #cli_name, value, #cli_name, value
                                 )));
                             }
                             value
