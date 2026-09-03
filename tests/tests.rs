@@ -236,6 +236,14 @@ fn function_help_uses_signature_and_documentation() {
     assert!(help.contains("[--nickname <NICKNAME>]"));
     assert!(help.contains("[--verbose]"));
     assert!(help.contains("-h, --help"));
+    assert!(
+        help.contains("    --age <AGE>      Person's age.\n"),
+        "descriptions should be aligned, got: {help}"
+    );
+    assert!(
+        help.ends_with("    -h, --help       Print help"),
+        "got: {help}"
+    );
 }
 
 #[test]
@@ -244,6 +252,10 @@ fn command_group_has_root_and_command_help() {
     assert!(root.contains("Greeting commands."));
     assert!(root.contains("say-hello"));
     assert!(root.contains("Say hello."));
+    assert!(
+        root.contains("    bye          Say goodbye.\n"),
+        "command descriptions should be aligned, got: {root}"
+    );
 
     let command = command_group::run(["say-hello", "--help"])
         .unwrap()

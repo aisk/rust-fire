@@ -262,6 +262,33 @@ fn arguments(function: &mut ItemFn) -> syn::Result<Vec<Argument>> {
         .collect()
 }
 
+/// Renders an indented two column list, padding the left column so that every
+/// description starts at the same offset. Entries without a description are
+/// left unpadded to avoid trailing whitespace.
+fn aligned_list(entries: &[(String, String)]) -> String {
+    let width = entries
+        .iter()
+        .filter(|(_, description)| !description.is_empty())
+        .map(|(term, _)| term.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut list = String::new();
+    for (term, description) in entries {
+        list.push_str("    ");
+        if description.is_empty() {
+            list.push_str(term);
+        } else {
+            let padding = width.saturating_sub(term.chars().count());
+            list.push_str(term);
+            list.push_str(&" ".repeat(padding));
+            list.push_str("    ");
+            list.push_str(description);
+        }
+        list.push('\n');
+    }
+    list
+}
+
 fn command_help(function: &ItemFn, arguments: &[Argument], command_name: &str) -> String {
     let mut help = String::new();
     let description = documentation(&function.attrs);
@@ -292,23 +319,22 @@ fn command_help(function: &ItemFn, arguments: &[Argument], command_name: &str) -
         help.push_str(&option);
     }
     help.push_str("\n\nOptions:\n");
-    for argument in arguments {
-        let option = match argument.kind {
-            ArgumentKind::Flag => format!("    --{}", argument.cli_name),
-            _ => format!(
-                "    --{} <{}>",
-                argument.cli_name,
-                argument.cli_name.replace('-', "_").to_uppercase()
-            ),
-        };
-        help.push_str(&option);
-        if !argument.description.is_empty() {
-            help.push_str("    ");
-            help.push_str(&argument.description.replace('\n', " "));
-        }
-        help.push('\n');
-    }
-    help.push_str("    -h, --help    Print help");
+    let mut options: Vec<(String, String)> = arguments
+        .iter()
+        .map(|argument| {
+            let term = match argument.kind {
+                ArgumentKind::Flag => format!("--{}", argument.cli_name),
+                _ => format!(
+                    "--{} <{}>",
+                    argument.cli_name,
+                    argument.cli_name.replace('-', "_").to_uppercase()
+                ),
+            };
+            (term, argument.description.replace('\n', " "))
+        })
+        .collect();
+    options.push(("-h, --help".to_string(), "Print help".to_string()));
+    help.push_str(aligned_list(&options).trim_end_matches('\n'));
     help
 }
 
@@ -591,6 +617,7 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         }
         let command_name = kebab_case(&function.sig.ident.to_string());
         let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
+        let description = documentation(&function.attrs).replace('\n', " ");
         runners.push(command_runner(
             function,
             &runner_name,
@@ -598,13 +625,13 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
             &command_name,
             tokio,
         )?);
-        commands.push((command_name, runner_name));
+        commands.push((command_name, runner_name, description));
     }
 
     for runner in runners {
         items.push(syn::parse2(runner).expect("generated command runner"));
     }
-    let dispatch = commands.iter().map(|(command_name, runner_name)| {
+    let dispatch = commands.iter().map(|(command_name, runner_name, _)| {
         quote! { #command_name => #runner_name(arguments), }
     });
     let mut root_help = String::new();
@@ -613,26 +640,14 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         root_help.push_str("\n\n");
     }
     root_help.push_str("Usage: {program} <COMMAND>\n\nCommands:\n");
-    for (command_name, _) in &commands {
-        let description = items
-            .iter()
-            .find_map(|item| match item {
-                Item::Fn(function)
-                    if kebab_case(&function.sig.ident.to_string()) == *command_name =>
-                {
-                    Some(documentation(&function.attrs))
-                }
-                _ => None,
-            })
-            .unwrap_or_default();
-        root_help.push_str(&format!("    {command_name}"));
-        if !description.is_empty() {
-            root_help.push_str("    ");
-            root_help.push_str(&description.replace('\n', " "));
-        }
-        root_help.push('\n');
-    }
-    root_help.push_str("\nOptions:\n    -h, --help    Print help");
+    let command_list: Vec<(String, String)> = commands
+        .iter()
+        .map(|(command_name, _, description)| (command_name.clone(), description.clone()))
+        .collect();
+    root_help.push_str(&aligned_list(&command_list));
+    root_help.push_str("\nOptions:\n");
+    let root_options = [("-h, --help".to_string(), "Print help".to_string())];
+    root_help.push_str(aligned_list(&root_options).trim_end_matches('\n'));
     let root_usage = root_help
         .lines()
         .find(|line| line.starts_with("Usage:"))
