@@ -66,7 +66,9 @@ For module applications, `app --help` lists the subcommands and
 
 ## Subcommands
 
-Place `#[fire::main]` on an inline module to turn its functions into subcommands:
+Place `#[fire::main]` on an inline module to turn its `pub` functions into
+subcommands. Private functions stay private, so a module can keep its helpers
+next to its commands:
 
 ```rust
 #[fire::main]
@@ -112,6 +114,9 @@ Both common option formats are accepted:
 $ app --name John
 $ app --name=John
 ```
+
+An option may be given only once, and a value starting with `-` is never taken
+from the next argument, so write it as `--count=-1`.
 
 A command may return `Result`. Errors are printed to stderr and the application
 exits with status 2.
