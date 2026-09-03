@@ -109,6 +109,29 @@ mod async_command_group {
     }
 }
 
+#[allow(dead_code)]
+mod raw_identifier_command {
+    /// Item commands.
+    #[fire::main]
+    mod cli {
+        /// Describe a type.
+        pub fn r#type(r#struct: String) {
+            super::super::CALLS
+                .lock()
+                .unwrap()
+                .push(format!("type:{}", r#struct));
+        }
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<std::ffi::OsString>,
+    {
+        cli::__fire_run(args)
+    }
+}
+
 fn assert_called(expected: &str) {
     let mut calls = CALLS.lock().unwrap();
     let index = calls
@@ -179,6 +202,17 @@ fn help_flag_is_not_detected_inside_an_option_value() {
         "expected the command to run, got help output"
     );
     assert_called("-h:1:None:false");
+}
+
+#[test]
+fn raw_identifiers_drop_their_prefix() {
+    raw_identifier_command::run(["type", "--struct", "Point"]).unwrap();
+    assert_called("type:Point");
+
+    let help = raw_identifier_command::run(["type", "--help"])
+        .unwrap()
+        .unwrap();
+    assert!(help.contains("--struct <STRUCT>"), "got: {help}");
 }
 
 #[cfg(unix)]

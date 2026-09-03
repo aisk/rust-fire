@@ -157,8 +157,10 @@ enum ArgumentKind {
     Flag,
 }
 
+/// Turns a Rust identifier into its command-line spelling, dropping the `r#`
+/// prefix of raw identifiers and replacing underscores with dashes.
 fn kebab_case(name: &str) -> String {
-    name.replace('_', "-")
+    name.strip_prefix("r#").unwrap_or(name).replace('_', "-")
 }
 
 fn inner_type<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
