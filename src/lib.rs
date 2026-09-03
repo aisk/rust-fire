@@ -55,6 +55,8 @@
 //!
 //! Function and parameter names are converted from `snake_case` to
 //! `kebab-case`. The example exposes `create` and `remove` as subcommands.
+//! Only `pub` functions become subcommands, so a module can keep private
+//! helper functions next to its commands.
 //!
 //! # Parameter mapping
 //!
@@ -124,7 +126,8 @@
 //!
 //! # Current limitations
 //!
-//! - Command modules must be inline modules.
+//! - Command modules must be inline modules, and only their `pub` functions
+//!   become subcommands.
 //! - Methods and generic functions are not supported.
 //! - Async functions require `#[fire::main(tokio)]`.
 //! - Parameters are named options; positional arguments and short option names
@@ -136,7 +139,7 @@ use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
     parse_macro_input, Attribute, Expr, FnArg, Item, ItemFn, ItemMod, Lit, Meta, Pat, ReturnType,
-    Type,
+    Type, Visibility,
 };
 
 struct Argument {
@@ -560,6 +563,9 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         let Item::Fn(function) = item else {
             continue;
         };
+        if !matches!(function.vis, Visibility::Public(_)) {
+            continue;
+        }
         let command_name = kebab_case(&function.sig.ident.to_string());
         let runner_name = format_ident!("__fire_run_{}", function.sig.ident);
         runners.push(command_runner(
@@ -652,7 +658,8 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
 ///
 /// On a function, this attribute generates a CLI parser and the crate's
 /// `fn main()`. On an inline module, it also generates a subcommand dispatcher
-/// whose commands are the functions declared directly inside that module.
+/// whose commands are the `pub` functions declared directly inside that
+/// module.
 ///
 /// Command behavior is inferred from parameter types:
 ///
