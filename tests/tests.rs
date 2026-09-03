@@ -2,6 +2,8 @@ use std::sync::Mutex;
 
 static CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+type AliasedResult = Result<(), String>;
+
 #[allow(dead_code)]
 mod single_command {
     /// Greet a person.
@@ -132,6 +134,56 @@ mod raw_identifier_command {
     }
 }
 
+#[allow(dead_code)]
+mod aliased_result_command {
+    /// Deploy somewhere.
+    #[fire::main]
+    fn deploy(target: String) -> super::AliasedResult {
+        if target == "production" {
+            return Err("production deployments are disabled".to_string());
+        }
+        super::CALLS
+            .lock()
+            .unwrap()
+            .push(format!("deploy:{target}"));
+        Ok(())
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<std::ffi::OsString>,
+    {
+        __fire_run_deploy(args)
+    }
+}
+
+#[allow(dead_code)]
+mod other_return_types {
+    /// Assorted commands.
+    #[fire::main]
+    mod cli {
+        /// Return unit explicitly.
+        #[allow(clippy::unused_unit)]
+        pub fn unit() -> () {
+            super::super::CALLS.lock().unwrap().push("unit".to_string());
+        }
+
+        /// Never return.
+        pub fn diverge() -> ! {
+            panic!("diverged")
+        }
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<std::ffi::OsString>,
+    {
+        cli::__fire_run(args)
+    }
+}
+
 fn assert_called(expected: &str) {
     let mut calls = CALLS.lock().unwrap();
     let index = calls
@@ -172,6 +224,21 @@ fn async_module_mixes_async_and_sync_commands() {
 
     let error = async_command_group::run(["ping", "--host", "unreachable"]).unwrap_err();
     assert_eq!(error, "host is unreachable");
+}
+
+#[test]
+fn errors_from_an_aliased_result_are_reported() {
+    aliased_result_command::run(["--target", "staging"]).unwrap();
+    assert_called("deploy:staging");
+
+    let error = aliased_result_command::run(["--target", "production"]).unwrap_err();
+    assert_eq!(error, "production deployments are disabled");
+}
+
+#[test]
+fn explicit_unit_and_diverging_commands_are_supported() {
+    other_return_types::run(["unit"]).unwrap();
+    assert_called("unit");
 }
 
 #[test]

@@ -118,8 +118,8 @@ $ app --name=John
 An option may be given only once, and a value starting with `-` is never taken
 from the next argument, so write it as `--count=-1`.
 
-A command may return `Result`. Errors are printed to stderr and the application
-exits with status 2.
+A command returns `()` or `Result<_, E>` where `E: Display`. Errors are printed
+to stderr and the application exits with status 2.
 
 ```rust
 #[fire::main]
@@ -128,6 +128,10 @@ fn deploy(target: String) -> Result<(), DeployError> {
     Ok(())
 }
 ```
+
+The return value is dispatched through a trait rather than by matching on the
+return type, so aliases such as `anyhow::Result<()>` work too. Any other return
+type is a compile error.
 
 ## Async
 

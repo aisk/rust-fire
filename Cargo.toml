@@ -9,6 +9,7 @@ documentation = "https://docs.rs/fire"
 keywords = ["cli", "args", "argparse", "command-line", "fire"]
 categories = ["command-line-utilities"]
 edition = "2021"
+rust-version = "1.78"
 
 [lib]
 proc-macro = true
