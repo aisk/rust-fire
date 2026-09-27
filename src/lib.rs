@@ -72,8 +72,9 @@
 //! command, or argument that is not valid UTF-8 is reported on stderr together
 //! with the relevant usage line. CLI errors exit with status code 2.
 //!
-//! A value that starts with `-` is never taken from the next argument, so it
-//! has to be written as `--name=-1`.
+//! A value that starts with `--` is never taken from the next argument, so it
+//! has to be written as `--name=--value`. Negative numbers such as `-1` can be
+//! passed either way.
 //!
 //! # Generated help
 //!
@@ -376,10 +377,10 @@ fn command_help(
 
 fn program_name() -> TokenStream2 {
     quote! {
-        std::env::args_os()
+        ::std::env::args_os()
             .next()
             .and_then(|path| {
-                std::path::Path::new(&path)
+                ::std::path::Path::new(&path)
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
             })
@@ -390,7 +391,7 @@ fn program_name() -> TokenStream2 {
 /// The version reported by `-V`/`--version`, read from the application's own
 /// Cargo metadata when the generated code is compiled.
 fn version_output() -> TokenStream2 {
-    quote! { format!("{} {}", program, env!("CARGO_PKG_VERSION")) }
+    quote! { ::std::format!("{} {}", program, ::std::env!("CARGO_PKG_VERSION")) }
 }
 
 fn parsed_value(value: TokenStream2, ty: &Type, cli_name: &str) -> TokenStream2 {
@@ -399,7 +400,7 @@ fn parsed_value(value: TokenStream2, ty: &Type, cli_name: &str) -> TokenStream2 
     } else {
         quote! {
             #value.parse::<#ty>().map_err(|_| {
-                __fire_error(format!("invalid value for '--{}': '{}'", #cli_name, #value))
+                __fire_error(::std::format!("invalid value for '--{}': '{}'", #cli_name, #value))
             })?
         }
     }
@@ -416,20 +417,20 @@ fn output_trait() -> TokenStream2 {
             label = "a command must return `()` or `Result<_, E>` where `E: Display`"
         )]
         trait __FireOutput {
-            fn __fire_report(self) -> Result<(), String>;
+            fn __fire_report(self) -> ::std::result::Result<(), ::std::string::String>;
         }
 
         impl __FireOutput for () {
-            fn __fire_report(self) -> Result<(), String> {
-                Ok(())
+            fn __fire_report(self) -> ::std::result::Result<(), ::std::string::String> {
+                ::std::result::Result::Ok(())
             }
         }
 
-        impl<T, E> __FireOutput for Result<T, E>
+        impl<T, E> __FireOutput for ::std::result::Result<T, E>
         where
-            E: std::fmt::Display,
+            E: ::std::fmt::Display,
         {
-            fn __fire_report(self) -> Result<(), String> {
+            fn __fire_report(self) -> ::std::result::Result<(), ::std::string::String> {
                 self.map(|_| ()).map_err(|error| error.to_string())
             }
         }
@@ -493,7 +494,7 @@ fn command_runner(
         let output = version_output();
         quote! {
             if __fire_key == "--version" || __fire_key == "-V" {
-                return Ok(Some(#output));
+                return ::std::result::Result::Ok(::std::option::Option::Some(#output));
             }
         }
     } else {
@@ -502,7 +503,7 @@ fn command_runner(
 
     let storage = arguments.iter().map(|argument| {
         let storage_name = format_ident!("__fire_value_{}", argument.ident);
-        quote! { let mut #storage_name: Option<String> = None; }
+        quote! { let mut #storage_name: ::std::option::Option<::std::string::String> = ::std::option::Option::None; }
     });
 
     let option_matches = arguments.iter().map(|argument| {
@@ -510,37 +511,37 @@ fn command_runner(
         let cli_name = &argument.cli_name;
         match argument.kind {
             ArgumentKind::Flag => quote! {
-                if __fire_key == concat!("--", #cli_name) {
+                if __fire_key == ::std::concat!("--", #cli_name) {
                     if __fire_inline_value.is_some() {
-                        return Err(__fire_error(format!("flag '--{}' does not take a value", #cli_name)));
+                        return ::std::result::Result::Err(__fire_error(::std::format!("flag '--{}' does not take a value", #cli_name)));
                     }
                     if #storage_name.is_some() {
-                        return Err(__fire_error(format!(
+                        return ::std::result::Result::Err(__fire_error(::std::format!(
                             "flag '--{}' is given more than once",
                             #cli_name
                         )));
                     }
-                    #storage_name = Some("true".to_string());
+                    #storage_name = ::std::option::Option::Some("true".to_string());
                     __fire_matched = true;
                 }
             },
             ArgumentKind::Required | ArgumentKind::Optional => quote! {
-                if __fire_key == concat!("--", #cli_name) {
+                if __fire_key == ::std::concat!("--", #cli_name) {
                     if #storage_name.is_some() {
-                        return Err(__fire_error(format!(
+                        return ::std::result::Result::Err(__fire_error(::std::format!(
                             "option '--{}' is given more than once",
                             #cli_name
                         )));
                     }
                     let value = match __fire_inline_value {
-                        Some(value) => value.to_string(),
-                        None => {
+                        ::std::option::Option::Some(value) => value.to_string(),
+                        ::std::option::Option::None => {
                             __fire_index += 1;
                             let value = __fire_args.get(__fire_index).cloned().ok_or_else(|| {
-                                __fire_error(format!("option '--{}' requires a value", #cli_name))
+                                __fire_error(::std::format!("option '--{}' requires a value", #cli_name))
                             })?;
                             if value.starts_with("--") || value == "-h" {
-                                return Err(__fire_error(format!(
+                                return ::std::result::Result::Err(__fire_error(::std::format!(
                                     "option '--{}' requires a value, found '{}'; write '--{}={}' to use it as the value",
                                     #cli_name, value, #cli_name, value
                                 )));
@@ -548,7 +549,7 @@ fn command_runner(
                             value
                         }
                     };
-                    #storage_name = Some(value);
+                    #storage_name = ::std::option::Option::Some(value);
                     __fire_matched = true;
                 }
             },
@@ -572,8 +573,8 @@ fn command_runner(
                     let parsed = parsed_value(quote! { value }, inner, cli_name);
                     quote! {
                         let #ident: #ty = match #storage_name.as_ref() {
-                            Some(value) => Some(#parsed),
-                            None => None,
+                            ::std::option::Option::Some(value) => ::std::option::Option::Some(#parsed),
+                            ::std::option::Option::None => ::std::option::Option::None,
                         };
                     }
                 }
@@ -582,7 +583,7 @@ fn command_runner(
                 if is_str_reference(ty) {
                     quote! {
                         let #ident: #ty = #storage_name.as_deref().ok_or_else(|| {
-                            __fire_error(format!("missing required option '--{}'", #cli_name))
+                            __fire_error(::std::format!("missing required option '--{}'", #cli_name))
                         })?;
                     }
                 } else {
@@ -590,7 +591,7 @@ fn command_runner(
                     quote! {
                         let #ident: #ty = {
                             let value = #storage_name.as_ref().ok_or_else(|| {
-                                __fire_error(format!("missing required option '--{}'", #cli_name))
+                                __fire_error(::std::format!("missing required option '--{}'", #cli_name))
                             })?;
                             #parsed
                         };
@@ -619,37 +620,37 @@ fn command_runner(
             let report = quote_spanned! { ty.span() =>
                 __FireOutput::__fire_report(#invocation)
             };
-            quote! { #report.map(|_| None) }
+            quote! { #report.map(|_| ::std::option::Option::None) }
         }
         ReturnType::Default => quote! {
             #invocation;
-            Ok(None)
+            ::std::result::Result::Ok(::std::option::Option::None)
         },
     };
 
     Ok(quote! {
         #[doc(hidden)]
-        #visibility fn #runner_name<I, S>(input: I) -> Result<Option<String>, String>
+        #visibility fn #runner_name<I, S>(input: I) -> ::std::result::Result<::std::option::Option<::std::string::String>, ::std::string::String>
         where
-            I: IntoIterator<Item = S>,
-            S: Into<std::ffi::OsString>,
+            I: ::std::iter::IntoIterator<Item = S>,
+            S: ::std::convert::Into<::std::ffi::OsString>,
         {
             let program = #program_name;
             let __fire_help = #help.replace("{program}", &program);
             let __fire_usage = #usage.replace("{program}", &program);
-            let __fire_error = |message: String| {
-                format!(
+            let __fire_error = |message: ::std::string::String| {
+                ::std::format!(
                     "{}\n\n{}\n\nFor more information, try '--help'.",
                     message, __fire_usage
                 )
             };
-            let mut __fire_args: Vec<String> = Vec::new();
+            let mut __fire_args: ::std::vec::Vec<::std::string::String> = ::std::vec::Vec::new();
             for __fire_argument in input {
-                let __fire_argument: std::ffi::OsString = __fire_argument.into();
+                let __fire_argument: ::std::ffi::OsString = __fire_argument.into();
                 match __fire_argument.into_string() {
-                    Ok(__fire_argument) => __fire_args.push(__fire_argument),
-                    Err(__fire_argument) => {
-                        return Err(__fire_error(format!(
+                    ::std::result::Result::Ok(__fire_argument) => __fire_args.push(__fire_argument),
+                    ::std::result::Result::Err(__fire_argument) => {
+                        return ::std::result::Result::Err(__fire_error(::std::format!(
                             "argument '{}' is not valid UTF-8",
                             __fire_argument.to_string_lossy()
                         )));
@@ -662,17 +663,17 @@ fn command_runner(
             while __fire_index < __fire_args.len() {
                 let __fire_raw = &__fire_args[__fire_index];
                 let (__fire_key, __fire_inline_value) = match __fire_raw.split_once('=') {
-                    Some((key, value)) => (key, Some(value)),
-                    None => (__fire_raw.as_str(), None),
+                    ::std::option::Option::Some((key, value)) => (key, ::std::option::Option::Some(value)),
+                    ::std::option::Option::None => (__fire_raw.as_str(), ::std::option::Option::None),
                 };
                 if __fire_key == "--help" || __fire_key == "-h" {
-                    return Ok(Some(__fire_help));
+                    return ::std::result::Result::Ok(::std::option::Option::Some(__fire_help));
                 }
                 #version_match
                 let mut __fire_matched = false;
                 #(#option_matches)*
                 if !__fire_matched {
-                    return Err(__fire_error(format!("unexpected argument '{}'", __fire_raw)));
+                    return ::std::result::Result::Err(__fire_error(::std::format!("unexpected argument '{}'", __fire_raw)));
                 }
                 __fire_index += 1;
             }
@@ -687,11 +688,11 @@ fn entrypoint(call: TokenStream2) -> TokenStream2 {
     quote! {
         fn main() {
             match #call {
-                Ok(Some(help)) => println!("{}", help),
-                Ok(None) => {}
-                Err(error) => {
-                    eprintln!("error: {}", error);
-                    std::process::exit(2);
+                ::std::result::Result::Ok(::std::option::Option::Some(help)) => ::std::println!("{}", help),
+                ::std::result::Result::Ok(::std::option::Option::None) => {}
+                ::std::result::Result::Err(error) => {
+                    ::std::eprintln!("error: {}", error);
+                    ::std::process::exit(2);
                 }
             }
         }
@@ -718,7 +719,7 @@ fn expand_function(mut function: ItemFn, tokio: bool) -> syn::Result<TokenStream
         "",
         tokio,
     )?;
-    let main = entrypoint(quote! { #runner_name(std::env::args_os().skip(1)) });
+    let main = entrypoint(quote! { #runner_name(::std::env::args_os().skip(1)) });
     Ok(quote! { #function #output #runner #main })
 }
 
@@ -793,19 +794,19 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
     items.push(
         syn::parse2(quote! {
             #[doc(hidden)]
-            pub(crate) fn __fire_run<I, S>(input: I) -> Result<Option<String>, String>
+            pub(crate) fn __fire_run<I, S>(input: I) -> ::std::result::Result<::std::option::Option<::std::string::String>, ::std::string::String>
             where
-                I: IntoIterator<Item = S>,
-            S: Into<std::ffi::OsString>,
+                I: ::std::iter::IntoIterator<Item = S>,
+            S: ::std::convert::Into<::std::ffi::OsString>,
             {
                 let mut input = input
                     .into_iter()
-                    .map(|argument| -> std::ffi::OsString { argument.into() });
+                    .map(|argument| -> ::std::ffi::OsString { argument.into() });
                 let program = #program_name;
                 let __fire_help = #root_help.replace("{program}", &program);
                 let __fire_usage = #root_usage.replace("{program}", &program);
-                let __fire_error = |message: String| {
-                    format!(
+                let __fire_error = |message: ::std::string::String| {
+                    ::std::format!(
                         "{}\n\n{}\n\nFor more information, try '--help'.",
                         message, __fire_usage
                     )
@@ -814,28 +815,28 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
                     .next()
                     .ok_or_else(|| __fire_error("missing command".to_string()))?;
                 let command = command.into_string().map_err(|command| {
-                    __fire_error(format!(
+                    __fire_error(::std::format!(
                         "command '{}' is not valid UTF-8",
                         command.to_string_lossy()
                     ))
                 })?;
                 if command == "--help" || command == "-h" {
-                    return Ok(Some(__fire_help));
+                    return ::std::result::Result::Ok(::std::option::Option::Some(__fire_help));
                 }
                 if command == "--version" || command == "-V" {
-                    return Ok(Some(#version_output));
+                    return ::std::result::Result::Ok(::std::option::Option::Some(#version_output));
                 }
-                let arguments: Vec<std::ffi::OsString> = input.collect();
+                let arguments: ::std::vec::Vec<::std::ffi::OsString> = input.collect();
                 match command.as_str() {
                     #(#dispatch)*
-                    _ => Err(__fire_error(format!("unknown command '{}'", command))),
+                    _ => ::std::result::Result::Err(__fire_error(::std::format!("unknown command '{}'", command))),
                 }
             }
         })
         .expect("generated command dispatcher"),
     );
 
-    let main = entrypoint(quote! { #module_name::__fire_run(std::env::args_os().skip(1)) });
+    let main = entrypoint(quote! { #module_name::__fire_run(::std::env::args_os().skip(1)) });
     Ok(quote! { #module #main })
 }
 

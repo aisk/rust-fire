@@ -137,6 +137,49 @@ mod version_parameter {
 }
 
 #[allow(dead_code)]
+mod shadowed_prelude {
+    use std::io::Result;
+
+    #[fire::main]
+    fn touch(path: String) -> Result<()> {
+        super::CALLS.lock().unwrap().push(format!("touch:{path}"));
+        Ok(())
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> ::std::result::Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<std::ffi::OsString>,
+    {
+        __fire_run_touch(args)
+    }
+}
+
+#[allow(dead_code)]
+mod shadowed_prelude_group {
+    #[fire::main]
+    mod cli {
+        type Result<T> = std::result::Result<T, String>;
+
+        pub fn check(count: i32) -> Result<()> {
+            super::super::CALLS
+                .lock()
+                .unwrap()
+                .push(format!("check:{count}"));
+            Ok(())
+        }
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<std::ffi::OsString>,
+    {
+        cli::__fire_run(args)
+    }
+}
+
+#[allow(dead_code)]
 mod raw_identifier_command {
     /// Item commands.
     #[fire::main]
@@ -402,4 +445,13 @@ fn command_group_has_root_and_command_help() {
         .unwrap();
     assert!(command.contains("Usage:"));
     assert!(command.contains("say-hello --name <NAME>"));
+}
+
+#[test]
+fn single_argument_result_aliases_are_supported() {
+    shadowed_prelude::run(["--path", "a.txt"]).unwrap();
+    assert_called("touch:a.txt");
+
+    shadowed_prelude_group::run(["check", "--count", "-1"]).unwrap();
+    assert_called("check:-1");
 }

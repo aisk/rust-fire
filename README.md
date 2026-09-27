@@ -129,8 +129,9 @@ $ app --name John
 $ app --name=John
 ```
 
-An option may be given only once, and a value starting with `-` is never taken
-from the next argument, so write it as `--count=-1`.
+An option may be given only once, and a value starting with `--` is never
+taken from the next argument, so write it as `--name=--value`. Negative numbers
+such as `--count -1` work as is.
 
 A command returns `()` or `Result<_, E>` where `E: Display`. Errors are printed
 to stderr and the application exits with status 2.
