@@ -59,10 +59,24 @@ Options:
     --host <HOST>    Address to listen on.
     --verbose        Enable verbose logging.
     -h, --help       Print help
+    -V, --version    Print version
 ```
 
 For module applications, `app --help` lists the subcommands and
 `app <COMMAND> --help` describes one subcommand.
+
+## Version
+
+`-V` and `--version` print the program name and the version from your
+`Cargo.toml`:
+
+```console
+$ app --version
+app 0.1.0
+```
+
+Only the top level command accepts them. A parameter named `version` takes
+over `--version` instead.
 
 ## Subcommands
 

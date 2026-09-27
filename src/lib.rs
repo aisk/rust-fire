@@ -89,10 +89,18 @@
 //!     --name <NAME>    Person to welcome.
 //!     --excited        Add an exclamation mark.
 //!     -h, --help       Print help
+//!     -V, --version    Print version
 //! ```
 //!
 //! Module applications additionally support `app --help` to list commands and
 //! `app <COMMAND> --help` to describe one command.
+//!
+//! # Version
+//!
+//! `-V` and `--version` print the program name followed by the
+//! `CARGO_PKG_VERSION` of the application crate. Only the top level command
+//! accepts them, and a parameter named `version` replaces the generated
+//! `--version` option.
 //!
 //! # Fallible commands
 //!
@@ -309,7 +317,12 @@ fn aligned_list(entries: &[(String, String)]) -> String {
     list
 }
 
-fn command_help(function: &ItemFn, arguments: &[Argument], command_name: &str) -> String {
+fn command_help(
+    function: &ItemFn,
+    arguments: &[Argument],
+    command_name: &str,
+    version: bool,
+) -> String {
     let mut help = String::new();
     let description = documentation(&function.attrs);
     if !description.is_empty() {
@@ -354,6 +367,9 @@ fn command_help(function: &ItemFn, arguments: &[Argument], command_name: &str) -
         })
         .collect();
     options.push(("-h, --help".to_string(), "Print help".to_string()));
+    if version {
+        options.push(("-V, --version".to_string(), "Print version".to_string()));
+    }
     help.push_str(aligned_list(&options).trim_end_matches('\n'));
     help
 }
@@ -369,6 +385,12 @@ fn program_name() -> TokenStream2 {
             })
             .unwrap_or_else(|| "app".to_string())
     }
+}
+
+/// The version reported by `-V`/`--version`, read from the application's own
+/// Cargo metadata when the generated code is compiled.
+fn version_output() -> TokenStream2 {
+    quote! { format!("{} {}", program, env!("CARGO_PKG_VERSION")) }
 }
 
 fn parsed_value(value: TokenStream2, ty: &Type, cli_name: &str) -> TokenStream2 {
@@ -453,14 +475,30 @@ fn command_runner(
             "parameter `help` collides with the generated `--help` option",
         ));
     }
+    // Only the root command reports the version, and a parameter named
+    // `version` keeps its own `--version` option.
+    let version = command_name.is_empty()
+        && !arguments
+            .iter()
+            .any(|argument| argument.cli_name == "version");
     let function_name = &function.sig.ident;
-    let help = command_help(function, &arguments, command_name);
+    let help = command_help(function, &arguments, command_name, version);
     let usage = help
         .lines()
         .find(|line| line.starts_with("Usage:"))
         .expect("command help always contains usage")
         .to_string();
     let program_name = program_name();
+    let version_match = if version {
+        let output = version_output();
+        quote! {
+            if __fire_key == "--version" || __fire_key == "-V" {
+                return Ok(Some(#output));
+            }
+        }
+    } else {
+        TokenStream2::new()
+    };
 
     let storage = arguments.iter().map(|argument| {
         let storage_name = format_ident!("__fire_value_{}", argument.ident);
@@ -630,6 +668,7 @@ fn command_runner(
                 if __fire_key == "--help" || __fire_key == "-h" {
                     return Ok(Some(__fire_help));
                 }
+                #version_match
                 let mut __fire_matched = false;
                 #(#option_matches)*
                 if !__fire_matched {
@@ -672,7 +711,13 @@ fn expand_function(mut function: ItemFn, tokio: bool) -> syn::Result<TokenStream
     } else {
         TokenStream2::new()
     };
-    let runner = command_runner(&mut function, &runner_name, quote! { pub(crate) }, "", tokio)?;
+    let runner = command_runner(
+        &mut function,
+        &runner_name,
+        quote! { pub(crate) },
+        "",
+        tokio,
+    )?;
     let main = entrypoint(quote! { #runner_name(std::env::args_os().skip(1)) });
     Ok(quote! { #function #output #runner #main })
 }
@@ -733,7 +778,10 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         .collect();
     root_help.push_str(&aligned_list(&command_list));
     root_help.push_str("\nOptions:\n");
-    let root_options = [("-h, --help".to_string(), "Print help".to_string())];
+    let root_options = [
+        ("-h, --help".to_string(), "Print help".to_string()),
+        ("-V, --version".to_string(), "Print version".to_string()),
+    ];
     root_help.push_str(aligned_list(&root_options).trim_end_matches('\n'));
     let root_usage = root_help
         .lines()
@@ -741,6 +789,7 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
         .expect("root help always contains usage")
         .to_string();
     let program_name = program_name();
+    let version_output = version_output();
     items.push(
         syn::parse2(quote! {
             #[doc(hidden)]
@@ -772,6 +821,9 @@ fn expand_module(mut module: ItemMod, tokio: bool) -> syn::Result<TokenStream2> 
                 })?;
                 if command == "--help" || command == "-h" {
                     return Ok(Some(__fire_help));
+                }
+                if command == "--version" || command == "-V" {
+                    return Ok(Some(#version_output));
                 }
                 let arguments: Vec<std::ffi::OsString> = input.collect();
                 match command.as_str() {

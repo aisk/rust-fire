@@ -92,13 +92,19 @@ mod async_command_group {
                 return Err("host is unreachable".to_string());
             }
             tokio::task::yield_now().await;
-            super::super::CALLS.lock().unwrap().push(format!("ping:{host}"));
+            super::super::CALLS
+                .lock()
+                .unwrap()
+                .push(format!("ping:{host}"));
             Ok(())
         }
 
         /// Show the version.
         pub fn version() {
-            super::super::CALLS.lock().unwrap().push("version".to_string());
+            super::super::CALLS
+                .lock()
+                .unwrap()
+                .push("version".to_string());
         }
     }
 
@@ -108,6 +114,25 @@ mod async_command_group {
         S: Into<std::ffi::OsString>,
     {
         cli::__fire_run(args)
+    }
+}
+
+#[allow(dead_code)]
+mod version_parameter {
+    #[fire::main]
+    fn release(version: u32) {
+        super::CALLS
+            .lock()
+            .unwrap()
+            .push(format!("release:{version}"));
+    }
+
+    pub(crate) fn run<I, S>(args: I) -> Result<Option<String>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<std::ffi::OsString>,
+    {
+        __fire_run_release(args)
     }
 }
 
@@ -324,9 +349,41 @@ fn function_help_uses_signature_and_documentation() {
         "descriptions should be aligned, got: {help}"
     );
     assert!(
-        help.ends_with("    -h, --help       Print help"),
+        help.ends_with("    -h, --help       Print help\n    -V, --version    Print version"),
         "got: {help}"
     );
+}
+
+#[test]
+fn version_flag_prints_package_version() {
+    let expected = format!(" {}", env!("CARGO_PKG_VERSION"));
+    for flag in ["--version", "-V"] {
+        let output = single_command::run([flag]).unwrap().unwrap();
+        assert!(output.ends_with(&expected), "got: {output}");
+        let output = command_group::run([flag]).unwrap().unwrap();
+        assert!(output.ends_with(&expected), "got: {output}");
+    }
+    let root = command_group::run(["--help"]).unwrap().unwrap();
+    assert!(root.contains("-V, --version"), "got: {root}");
+}
+
+#[test]
+fn subcommands_do_not_accept_version_flag() {
+    let error = command_group::run(["bye", "--version"]).unwrap_err();
+    assert!(
+        error.contains("unexpected argument '--version'"),
+        "got: {error}"
+    );
+    let help = command_group::run(["bye", "--help"]).unwrap().unwrap();
+    assert!(!help.contains("--version"), "got: {help}");
+}
+
+#[test]
+fn version_parameter_replaces_version_flag() {
+    version_parameter::run(["--version", "2"]).unwrap();
+    assert_called("release:2");
+    let help = version_parameter::run(["--help"]).unwrap().unwrap();
+    assert!(!help.contains("-V, --version"), "got: {help}");
 }
 
 #[test]
